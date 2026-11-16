@@ -1,11 +1,12 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { useHistory, useLocation } from 'react-router-dom';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
-import { UPDATE_PREVIEW } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { AppContext } from '../../context/Store';
 import { TAB_THUMBNAIL } from '../../shared/Constants';
 import { API } from '../../util/API';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
+import { buildCreateRequest, buildSaveRequest, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
 import CoordinatePicker from '../coordinatePicker/CoordinatePicker';
 import TabView from '../tabView/TabView';
 
@@ -34,6 +35,9 @@ const GeneralTabView = ({location}) => {
 
     const [wasValidated, setWasValidated] = useState(false);
     const [slugErrorMessage, setSlugErrorMessage] = useState('');
+    // True once the location has loaded into this tab's fields. Until then the tab must not write its
+    // blank starting values into the editor's shared copy (they would hide the real values).
+    const ready = useRef(false);
 
     /**
      * Every time a field changes update the preview so when this tab is exited the preview retains its data.
@@ -62,6 +66,7 @@ const GeneralTabView = ({location}) => {
         setContactEmail(locationWithChanges.contactEmail ? locationWithChanges.contactEmail : '');
         setIsPublished(locationWithChanges.isPublished ? locationWithChanges.isPublished: null);
         setComingSoon(locationWithChanges.comingSoon ? locationWithChanges.comingSoon : false);
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
 
@@ -73,14 +78,11 @@ const GeneralTabView = ({location}) => {
         }
         else {
             e.preventDefault();
-            // Resolve the id from the route as a fallback — previewLocation can briefly be
-            // empty on first mount, which would otherwise fall through to a create (duplicate).
-            const id = state.previewLocation?._id || (locationId !== 'new' ? locationId : undefined);
+            const id = resolveLocationId(state.previewLocation, history);
             if (id) {
-                const updateRequest = publish ? { ...state.previewLocation, _id: id, isPublished: true, isDraft: false } : { ...state.previewLocation, _id: id };
-                API.updateLocation_hideToast(updateRequest, (res, err) => {
+                API.updateLocation_hideToast(buildSaveRequest(state.previewLocation, id, { publish }), (res, err) => {
                     if (res && res.status === 200) {
-                        console.log('success!');
+                        dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                         if (publish) {
                             setIsPublished(true);
                             HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');
@@ -99,7 +101,7 @@ const GeneralTabView = ({location}) => {
                 });
             }
             else {
-                API.createLocation(state.previewLocation, (res, err) => {
+                API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                     if (res && res.status === 200) {
                         console.log('success!');
                         dispatch({type: UPDATE_PREVIEW, payload: res.data});
@@ -143,6 +145,7 @@ const GeneralTabView = ({location}) => {
             if (res && res.status === 200) {
                 console.log('success');
                 setComingSoon(newComingSoon);
+                dispatch({type: MERGE_PREVIEW, payload: {comingSoon: newComingSoon}});
             }
             else if (err) {
                 console.log(err);
@@ -179,18 +182,20 @@ const GeneralTabView = ({location}) => {
      * Updates the preview in context so when it is time to show the preview data from this tab will be included.
      */
     const updatePreview = () => {
+        if (!ready.current) return;
+        // Text fields are always included, even when empty, so clearing a field is saved (B7).
         const previewLocation = {
-            ...(name && {name}),
-            ...(slug && {slug}),
-            ...(addressFirstLine && {addressFirstLine}),
-            ...(addressSecondLine && {addressSecondLine}),
+            name,
+            slug,
+            addressFirstLine,
+            addressSecondLine,
             ...((lat && long) && {coordinates: [lat, long]}),
-            ...(shortDescription && {shortDescription}),
-            ...(longDescription && {longDescription}),
+            shortDescription,
+            longDescription,
             ...(features && {features}),
-            ...(contactName && {contactName}),
-            ...(contactPhone && {contactPhone}),
-            ...(contactEmail && {contactEmail}),
+            contactName,
+            contactPhone,
+            contactEmail,
             ...((isPublished != null) && {isPublished})
         };
         const payload = {

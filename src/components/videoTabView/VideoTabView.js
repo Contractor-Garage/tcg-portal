@@ -7,11 +7,12 @@ import React, {
 } from 'react';
 import { useDropzone } from 'react-dropzone';
 import Compress from 'compress.js';
-import { SET_VIDEO_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, SET_VIDEO_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
 import { AppContext } from '../../context/Store';
 import { TAB_MEDIA, TAB_PAYMENT } from '../../shared/Constants';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import VideoCard from '../videoCard/VideoCard';
 import './VideoTabView.sass';
@@ -37,6 +38,8 @@ const VideoTabView = ({ location }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [editingIndex, setEditingIndex] = useState(-1);
 
+    // True once the location has loaded into this tab (see GeneralTabView).
+    const ready = useRef(false);
     // Ref for tracking which existing videos' poster have been updated
     const updatedPostersToVideoIdMap = useRef({});
 
@@ -65,20 +68,19 @@ const VideoTabView = ({ location }) => {
                 ? locationWithChanges.isPublished
                 : null
         );
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
         e.preventDefault();
-        if (state.previewLocation._id) {
+        const locationId = resolveLocationId(state.previewLocation, history);
+        if (locationId) {
             HELPERS.showToast(TOAST_TYPES.INFO, 'Video Upload Started');
             setShowLoader(true);
             // First update the location data.
             // The server will be responsible for deleting any videos or poster images that are no longer in the new request.
-            const updateRequest = {
-                ...state.previewLocation,
-                ...(publish && { isPublished: true, isDraft: false })
-            };
+            const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
             const posterUpdateKeys = Object.keys(
                 updatedPostersToVideoIdMap.current
             );
@@ -89,6 +91,7 @@ const VideoTabView = ({ location }) => {
             }
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
+                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                     if (
                         state.videos_pending ||
                         Object.keys(updatedPostersToVideoIdMap.current).length >
@@ -155,7 +158,7 @@ const VideoTabView = ({ location }) => {
                                 posterUpdateResponses
                             ]) => {
                                 const locationVideosRequest = {
-                                    _id: state.previewLocation._id,
+                                    _id: locationId,
                                     detailPageVideos: []
                                 };
                                 if (state.videos_pending) {
@@ -211,6 +214,8 @@ const VideoTabView = ({ location }) => {
                                                     'Update Successful!'
                                                 );
                                             }
+                                            // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
+                                            dispatch({type: MERGE_PREVIEW, payload: savedFields(res.data)});
                                             setDetailPageVideos(
                                                 res.data.detailPageVideos
                                             );
@@ -251,9 +256,10 @@ const VideoTabView = ({ location }) => {
                 }
             });
         } else {
+            if (!canCreate(state.previewLocation)) return;
             HELPERS.showToast(TOAST_TYPES.INFO, 'Video Upload Started');
             setShowLoader(true);
-            API.createLocation(state.previewLocation, (res, err) => {
+            API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                 if (res && res.status === 200) {
                     // Once location is saved if there are pending images upload to cloudinary.
                     const idField = res.data._id;
@@ -365,6 +371,7 @@ const VideoTabView = ({ location }) => {
      * Updates the preview in context, so when it's time to show the preview, data from this tab will be included.
      */
     const updatePreview = () => {
+        if (!ready.current) return;
         const previewLocation = {
             ...(detailPageVideos && { detailPageVideos }),
             ...(isPublished != null && { isPublished })

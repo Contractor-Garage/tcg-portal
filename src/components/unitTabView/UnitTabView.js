@@ -1,11 +1,12 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { useHistory } from 'react-router-dom';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
-import { UPDATE_PREVIEW } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { AppContext } from '../../context/Store';
 import { TAB_MEDIA, TAB_THUMBNAIL } from '../../shared/Constants';
 import { API } from '../../util/API';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import UnitCard from '../unitCard/UnitCard';
 
@@ -19,6 +20,9 @@ const UnitTabView = ({location}) => {
     const [extras, setExtras] = useState();
     const [isPublished, setIsPublished] = useState();
     const [availabilityNote, setAvailabilityNote] = useState();
+    // True once the location has loaded into this tab (see GeneralTabView). Until then the tab must not
+    // write its blank starting values (an empty availability note would replace the real one).
+    const ready = useRef(false);
 
     // Fields for unit summary creation modal
     const [unitName_create, setUnitName_create] = useState('');
@@ -84,6 +88,7 @@ const UnitTabView = ({location}) => {
         setExtras(locationWithChanges.extras ? locationWithChanges.extras : '');
         setIsPublished(locationWithChanges.isPublished ? locationWithChanges.isPublished: null);
         setAvailabilityNote(locationWithChanges.availabilityNote ? locationWithChanges.availabilityNote : '');
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
 
@@ -95,10 +100,12 @@ const UnitTabView = ({location}) => {
         }
         else {
             e.preventDefault();
-            if (state.previewLocation._id) {
-                const updateRequest = publish ? { ...state.previewLocation, isPublished: true, isDraft: false } : state.previewLocation;
+            const locationId = resolveLocationId(state.previewLocation, history);
+            if (locationId) {
+                const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
                 API.updateLocation_hideToast(updateRequest, (res, err) => {
                     if (res && res.status === 200) {
+                        dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                         console.log('success!');
                         if (publish) {
                             setIsPublished(true);
@@ -114,7 +121,8 @@ const UnitTabView = ({location}) => {
                 });
             }
             else {
-                API.createLocation(state.previewLocation, (res, err) => {
+                if (!canCreate(state.previewLocation)) return;
+                API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                     if (res && res.status === 200) {
                         console.log('success!');
                         dispatch({type: UPDATE_PREVIEW, payload: res.data});
@@ -137,6 +145,7 @@ const UnitTabView = ({location}) => {
      * Updates the preview in context so when it is time to show the preview data from this tab will be included.
      */
     const updatePreview = () => {
+        if (!ready.current) return;
         const previewLocation = {
             ...(unitSummary && {unitSummary}),
             ...(units && {units}),
