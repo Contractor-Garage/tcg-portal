@@ -30,6 +30,7 @@
     "postbuild": "rmdir /s /q docs && ncp build docs && echo portal.contractorgarage.com > docs/CNAME",
     "deploy": "npm run build && git add . && git commit -m \"Build Commit\" && git push",
     "test": "react-scripts test",
+    "test:once": "react-scripts test --watchAll=false --silent",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

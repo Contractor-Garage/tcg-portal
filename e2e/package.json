@@ -1,0 +1,13 @@
+{
+  "name": "tcg-portal-e2e",
+  "private": true,
+  "description": "Browser tests for the portal's location editor, run locally against a throwaway database.",
+  "scripts": {
+    "test": "playwright test",
+    "install-browser": "playwright install --only-shell chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.49.1",
+    "mongodb": "3.7.4"
+  }
+}
