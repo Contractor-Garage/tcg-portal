@@ -66,7 +66,7 @@ const GeneralTabView = ({location}) => {
         setContactEmail(locationWithChanges.contactEmail ? locationWithChanges.contactEmail : '');
         setIsPublished(locationWithChanges.isPublished ? locationWithChanges.isPublished: null);
         setComingSoon(locationWithChanges.comingSoon ? locationWithChanges.comingSoon : false);
-        if (location._id || locationId === 'new') ready.current = true;
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
 

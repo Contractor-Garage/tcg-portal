@@ -14,6 +14,9 @@ const ADMIN_PASSWORD_HASH = '$2b$10$BNGmraAjnQKJqBGeoMkbFemoIjiJ/HDxrY/K3XJGnbB4
 const ADMIN_ID = new ObjectId('64e2e0000000000000000001');
 
 const fakeUploads = [];
+// How the fake Cloudinary behaves for the next test: { delayMs, fail }. Reset before every test.
+const fakeUploadBehavior = { delayMs: 0, fail: false };
+const setFakeUpload = ({ delayMs = 0, fail = false } = {}) => { fakeUploadBehavior.delayMs = delayMs; fakeUploadBehavior.fail = fail; };
 
 const test = base.test.extend({
     db: async ({}, use) => {
@@ -38,12 +41,15 @@ const test = base.test.extend({
     },
 
     page: async ({ page }, use) => {
+        setFakeUpload();
         const allowed = REAL_CLOUDINARY
             ? /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/|^https:\/\/(api|res)\.cloudinary\.com\//
             : /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//;
         await page.route(url => !allowed.test(url.href), route => route.abort());
         if (!REAL_CLOUDINARY) {
             await page.route(/^https:\/\/api\.cloudinary\.com\/v1_1\/[^/]+\/(image|video)\/upload/, async (route) => {
+                if (fakeUploadBehavior.delayMs) await new Promise(r => setTimeout(r, fakeUploadBehavior.delayMs));
+                if (fakeUploadBehavior.fail) return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":{"message":"e2e upload failure"}}' });
                 const kind = route.request().url().includes('/video/') ? 'video' : 'image';
                 const n = fakeUploads.length + 1;
                 const folder = kind === 'video' ? 'GARAGEVIDEOS' : 'TCG';
@@ -67,16 +73,10 @@ const test = base.test.extend({
     }
 });
 
-/**
- * Opens the editor for a location and waits until it has loaded.
- * The dev server runs React StrictMode, which mounts the editor twice; the editor's old
- * "reset 1 second after leaving" timer then empties its shared state ~1 s after opening (bug B11).
- * Until that is fixed, wait it out so tests exercise production-like behavior.
- */
-const openLocation = async (page, id, { waitForReset = true } = {}) => {
+/** Opens the editor for a location and waits until it has loaded. */
+const openLocation = async (page, id) => {
     await page.goto(`/#/location/${id}`);
     await base.expect(page.locator('#name')).not.toHaveValue('');
-    if (waitForReset) await page.waitForTimeout(1500);
 };
 
 /** Clicks "Next"/"Previous" until the tab whose heading starts with `heading` shows. */
@@ -104,4 +104,4 @@ const makePng = (width = 400, height = 300) => {
     return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 };
 
-module.exports = { test, expect: base.expect, openLocation, goToTab, makePng, fakeUploads };
+module.exports = { test, expect: base.expect, openLocation, goToTab, makePng, fakeUploads, setFakeUpload };

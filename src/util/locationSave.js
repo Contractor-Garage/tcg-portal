@@ -76,3 +76,17 @@ export const serverOwnedFields = (saved) => {
     });
     return fields;
 };
+
+const MEDIA_FIELDS = ['thumbnailImage', 'bannerImage', 'detailPageImages', 'detailPageVideos'];
+
+/**
+ * Status and media fields from a save reply. Upload callbacks merge these into the editor's shared
+ * copy directly, so it matches what was stored even if the tab that started the upload has closed (B3).
+ */
+export const savedFields = (saved) => {
+    const fields = serverOwnedFields(saved);
+    if (saved && typeof saved === 'object') {
+        MEDIA_FIELDS.forEach(key => { if (key in saved) fields[key] = saved[key]; });
+    }
+    return fields;
+};

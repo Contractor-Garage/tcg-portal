@@ -12,7 +12,7 @@ import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
 import { AppContext } from '../../context/Store';
 import { TAB_MEDIA, TAB_PAYMENT } from '../../shared/Constants';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import VideoCard from '../videoCard/VideoCard';
 import './VideoTabView.sass';
@@ -214,6 +214,8 @@ const VideoTabView = ({ location }) => {
                                                     'Update Successful!'
                                                 );
                                             }
+                                            // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
+                                            dispatch({type: MERGE_PREVIEW, payload: savedFields(res.data)});
                                             setDetailPageVideos(
                                                 res.data.detailPageVideos
                                             );

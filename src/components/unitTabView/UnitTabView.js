@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { useHistory } from 'react-router-dom';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
 import { MERGE_PREVIEW, UPDATE_PREVIEW } from '../../context/ActionTypes';
@@ -20,6 +20,9 @@ const UnitTabView = ({location}) => {
     const [extras, setExtras] = useState();
     const [isPublished, setIsPublished] = useState();
     const [availabilityNote, setAvailabilityNote] = useState();
+    // True once the location has loaded into this tab (see GeneralTabView). Until then the tab must not
+    // write its blank starting values (an empty availability note would replace the real one).
+    const ready = useRef(false);
 
     // Fields for unit summary creation modal
     const [unitName_create, setUnitName_create] = useState('');
@@ -85,6 +88,7 @@ const UnitTabView = ({location}) => {
         setExtras(locationWithChanges.extras ? locationWithChanges.extras : '');
         setIsPublished(locationWithChanges.isPublished ? locationWithChanges.isPublished: null);
         setAvailabilityNote(locationWithChanges.availabilityNote ? locationWithChanges.availabilityNote : '');
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
 
@@ -141,6 +145,7 @@ const UnitTabView = ({location}) => {
      * Updates the preview in context so when it is time to show the preview data from this tab will be included.
      */
     const updatePreview = () => {
+        if (!ready.current) return;
         const previewLocation = {
             ...(unitSummary && {unitSummary}),
             ...(units && {units}),

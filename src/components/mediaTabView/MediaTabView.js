@@ -2,7 +2,7 @@ import React, { useCallback, useContext, useEffect, useState, useRef } from 'rea
 import { useDropzone } from 'react-dropzone';
 import { TAB_UNIT, TAB_VIDEO } from '../../shared/Constants';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import './MediaTabView.sass';
 import Compress from 'compress.js';
@@ -110,6 +110,8 @@ const MediaTabView = ({location}) => {
                                 API.updateLocation_hideToast(locationImageRequest, (res, err) => {
                                     if (res && res.status === 200) {
                                         console.log('success');
+                                        // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
+                                        dispatch({type: MERGE_PREVIEW, payload: savedFields(res.data)});
                                         if (publish) {
                                             setIsPublished(true);
                                             HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');

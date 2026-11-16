@@ -6,7 +6,7 @@ import TabView from '../tabView/TabView';
 import Compress from 'compress.js';
 import { MERGE_PREVIEW, SET_THUMBNAIL_IMAGE_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields } from '../../util/locationSave';
 import './ThumbnailTabView.sass';
 import { API } from '../../util/API';
 import { useHistory } from 'react-router-dom';
@@ -62,6 +62,8 @@ const ThumbnailTabView = ({location}) => {
                                 API.updateLocation_hideToast(locationImageRequest, (res, err) => {
                                     if (res && res.status === 200) {
                                         console.log('Thumbnail Upload Success!');
+                                        // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
+                                        dispatch({type: MERGE_PREVIEW, payload: savedFields(res.data)});
                                         if (publish) {
                                             setIsPublished(true);
                                             HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');

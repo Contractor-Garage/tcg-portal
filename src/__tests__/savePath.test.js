@@ -1,10 +1,10 @@
 /**
  * Phase 2: one save path for every tab. Each test names the bug (B#) from the location editor review.
  */
-import { screen } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { UPDATE_PREVIEW } from '../context/ActionTypes';
-import { click, dispatch, fakeServer, flush, goToTab, installFakeServer, lastSavedBody, openEditor, savedBodies, toasts, type } from '../testUtils/editorHarness';
+import { click, dispatch, fakeServer, flush, navigate, releaseGets, goToTab, installFakeServer, lastSavedBody, openEditor, savedBodies, toasts, type } from '../testUtils/editorHarness';
 
 jest.mock('axios');
 
@@ -118,4 +118,44 @@ test('B13: a new location needs a name and slug before it can be saved from anot
     await click('Save As Draft');
     expect(fakeServer.requests.some(r => r.method === 'POST')).toBe(false);
     expect(toasts.map(t => t.message).join(' ')).toMatch(/Display Name and URL Slug/);
+});
+
+test('after creating a location, edits on the General tab are still saved', async () => {
+    installFakeServer([]);
+    await openEditor('new');
+    await type('Display Name', 'Brand New');
+    await type('URL Slug', 'brand-new');
+    await type('Latitude', '38.9');
+    await type('Longitude', '-94.7');
+    await click('Save As Draft');
+    await goToTab('Thumbnail');
+    await goToTab('General');
+    await type('Short Description', 'Added after creating');
+    await click('Save');
+    expect(lastSavedBody()).toMatchObject({ _id: 'new1', name: 'Brand New', shortDescription: 'Added after creating' });
+});
+
+test('opening the Unit tab before the location has loaded keeps its availability note', async () => {
+    installFakeServer([{ ...base, availabilityNote: 'Early bird lease-up sale' }]);
+    fakeServer.holdGets = true;
+    await openEditor('loc1', { waitForLoad: false });
+    await goToTab('Unit and Pricing');
+    await releaseGets();
+    expect(screen.getByLabelText('Availability Note')).toHaveValue('Early bird lease-up sale');
+    await click('Save');
+    expect(lastSavedBody().availabilityNote).toBe('Early bird lease-up sale');
+});
+
+test('B11: opening another location right after leaving one shows and saves the new location', async () => {
+    installFakeServer([base, { ...base, _id: 'loc2', name: 'Grandview', slug: 'grandview' }]);
+    await openEditor('loc1');
+    await navigate('/locations');
+    await navigate('/location/loc2');
+    await waitFor(() => expect(screen.getByLabelText('Display Name')).toHaveValue('Grandview'));
+    await act(() => new Promise(r => setTimeout(r, 1100))); // past the old 1-second reset timer
+    await flush();
+    expect(screen.getByLabelText('Display Name')).toHaveValue('Grandview');
+    await click('Save');
+    expect(lastSavedBody()).toMatchObject({ _id: 'loc2', name: 'Grandview' });
+    expect(fakeServer.db.loc1.name).toBe('Garage 9');
 });
