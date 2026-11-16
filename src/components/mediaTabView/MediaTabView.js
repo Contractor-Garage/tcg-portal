@@ -1,13 +1,14 @@
-import React, { useCallback, useContext, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useState, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { TAB_UNIT, TAB_VIDEO } from '../../shared/Constants';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import './MediaTabView.sass';
 import Compress from 'compress.js';
 import { API } from '../../util/API';
 import { AppContext } from '../../context/Store';
-import { SET_BANNER_IMAGE_PENDING, SET_DETAIL_PAGE_IMAGES_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, SET_BANNER_IMAGE_PENDING, SET_DETAIL_PAGE_IMAGES_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import ImageCard from '../imageCard/ImageCard';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
 import { useHistory } from 'react-router-dom';
@@ -19,6 +20,9 @@ const MediaTabView = ({location}) => {
     const [detailPageImages, setDetailPageImages] = useState();
     const [bannerImage, setBannerImage] = useState();
     const [isPublished, setIsPublished] = useState();
+    // True once the location has loaded into this tab (see GeneralTabView). Until then the tab must not
+    // write its blank starting values, which a Save would treat as removing the image.
+    const ready = useRef(false);
 
     // State for new image object being created before it is uploaded
     const [currentImage, setCurrentImage] = useState();
@@ -53,25 +57,24 @@ const MediaTabView = ({location}) => {
         setDetailPageImages(locationWithChanges.detailPageImages ? locationWithChanges.detailPageImages : '');
         setBannerImage(locationWithChanges.bannerImage ? locationWithChanges.bannerImage : undefined);
         setIsPublished(locationWithChanges.isPublished ? locationWithChanges.isPublished: null);
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
     
     const handleFormSubmit = (e, publish) => {
         e.preventDefault();
-        if (state.previewLocation._id) {
+        const locationId = resolveLocationId(state.previewLocation, history);
+        if (locationId) {
             // First update the location data.
             // The server will be responsible for deleting any images that are no longer in the new request.
-            const updateRequest = publish
-            ?
-            {...state.previewLocation, ...(state.previewLocation.bannerImage ?? {bannerImage: null}), _id: state.previewLocation._id, isPublished: true, isDraft: false}
-            :
-            {...state.previewLocation, ...(state.previewLocation.bannerImage ?? {bannerImage: null}), _id: state.previewLocation._id}
+            const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
+                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                     // Once location is saved if there are pending images upload to cloudinary.
                     if (state.bannerImage_pending || state.detailPageImages_pending) {
                         const files = [];
-                        const locationImageRequest = {_id: state.previewLocation._id};
+                        const locationImageRequest = {_id: locationId};
                         if (state.bannerImage_pending && state.bannerImage_pending.file) {
                             files.push(state.bannerImage_pending.file);
                             locationImageRequest.bannerImage = {
@@ -151,7 +154,8 @@ const MediaTabView = ({location}) => {
             });
         }
         else {
-            API.createLocation(state.previewLocation, (res, err) => {
+            if (!canCreate(state.previewLocation)) return;
+            API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                 if (res && res.status === 200) {
                     // Once location is saved if there are pending images upload to cloudinary.
                     const idField = res.data._id;
@@ -237,6 +241,7 @@ const MediaTabView = ({location}) => {
      * Updates the preview in context so when it is time to show the preview data from this tab will be included.
      */
     const updatePreview = () => {
+        if (!ready.current) return;
         const previewLocation = {
             ...(detailPageImages) && {detailPageImages},
             bannerImage,

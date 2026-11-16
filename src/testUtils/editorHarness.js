@@ -8,8 +8,9 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
+import { useContext } from 'react';
 import { MemoryRouter, Route } from 'react-router-dom';
-import Store from '../context/Store';
+import Store, { AppContext } from '../context/Store';
 import LocationEdit from '../routes/locations/locationEdit/LocationEdit';
 import { HELPERS } from '../util/helpers';
 
@@ -46,6 +47,7 @@ export const installFakeServer = (locations = []) => {
         fakeServer.requests.push({ method: 'PUT', url, body: JSON.parse(JSON.stringify(body)) });
         const stored = fakeServer.db[body._id];
         if (!stored) return Promise.reject(Object.assign(new Error('missing'), { response: { status: 404 } }));
+        if (body.slug === 'taken') return Promise.reject(Object.assign(new Error('slug taken'), { response: { status: 400 } }));
         Object.assign(stored, JSON.parse(JSON.stringify(body)));
         return ok(JSON.parse(JSON.stringify(stored)));
     });
@@ -73,10 +75,21 @@ export const installFakeServer = (locations = []) => {
 export const savedBodies = () => fakeServer.requests.filter(r => r.method === 'PUT').map(r => r.body);
 export const lastSavedBody = () => savedBodies().slice(-1)[0];
 
+/** Lets a test reach the Store directly, e.g. to empty the editor's copy the way the old reset timer did. */
+export const store = { state: null, dispatch: null };
+const StoreProbe = () => {
+    const [state, dispatch] = useContext(AppContext);
+    store.state = state;
+    store.dispatch = dispatch;
+    return null;
+};
+export const dispatch = async (action) => { act(() => store.dispatch(action)); await flush(); };
+
 /** Opens the editor for a location id (or 'new') and waits for it to load. */
 export const openEditor = async (id) => {
     const utils = render(
         <Store>
+            <StoreProbe />
             <MemoryRouter initialEntries={[`/location/${id}`]}>
                 <Route path='/location/:slug'><LocationEdit /></Route>
             </MemoryRouter>

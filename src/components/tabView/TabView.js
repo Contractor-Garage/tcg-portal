@@ -34,6 +34,16 @@ const TabView = props => {
         dispatch({type: SET_TABVIEW, payload: tabView})
     }
 
+    /**
+     * Publish runs the tab's normal save with the form as the event target, so the form is checked
+     * for invalid fields first and errors (like a taken URL slug) show on the right field (B13).
+     */
+    const handlePublishClick = (e) => {
+        e.preventDefault();
+        const form = document.getElementById(props.formId);
+        props.onPublish({ target: form, currentTarget: form, preventDefault: () => {}, stopPropagation: () => {} });
+    }
+
     const handlePreviewClick = () => {
         props.updatePreview();
         dispatch({type: OPEN_PREVIEW});
@@ -60,7 +70,7 @@ const TabView = props => {
                                         form={props.formId}
                                         type='submit'
                                         className="btn btn-primary ms-2"
-                                        onClick={props.onPublish}
+                                        onClick={handlePublishClick}
                                     >
                                         Publish
                                     </button>

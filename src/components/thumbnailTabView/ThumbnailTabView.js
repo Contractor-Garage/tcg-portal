@@ -1,11 +1,12 @@
-import React, { useCallback, useContext, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { AppContext } from '../../context/Store';
 import { TAB_GENERAL, TAB_UNIT } from '../../shared/Constants';
 import TabView from '../tabView/TabView';
 import Compress from 'compress.js';
-import { UPDATE_PREVIEW, SET_THUMBNAIL_IMAGE_PENDING } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, SET_THUMBNAIL_IMAGE_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
 import './ThumbnailTabView.sass';
 import { API } from '../../util/API';
 import { useHistory } from 'react-router-dom';
@@ -16,6 +17,9 @@ const ThumbnailTabView = ({location}) => {
 
     const [thumbnailImage, setThumbnailImage] = useState();
     const [isPublished, setIsPublished] = useState();
+    // True once the location has loaded into this tab (see GeneralTabView). Until then the tab must not
+    // write its blank starting values, which a Save would treat as removing the image.
+    const ready = useRef(false);
     
     const compress = new Compress();
     /**
@@ -33,24 +37,23 @@ const ThumbnailTabView = ({location}) => {
         };
         setThumbnailImage(locationWithChanges.thumbnailImage ? locationWithChanges.thumbnailImage : undefined);
         setIsPublished(locationWithChanges.isPublished ? locationWithChanges.isPublished: null);
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
         e.preventDefault();
-        if (state.previewLocation._id) {
-            const updateRequest = publish
-            ?
-            {...state.previewLocation, ...(state.previewLocation.thumbnailImage ?? {thumbnailImage: null}), _id: state.previewLocation._id, isPublished: true, isDraft: false}
-            :
-            {...state.previewLocation, ...(state.previewLocation.thumbnailImage ?? {thumbnailImage: null}), _id: state.previewLocation._id}
+        const locationId = resolveLocationId(state.previewLocation, history);
+        if (locationId) {
+            const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
+                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                     if (state.thumbnailImage_pending) {
                         API.uploadImages([state.thumbnailImage_pending.file], (res, err) => {
                             if (res) {
                                 const locationImageRequest = {
-                                    _id: state.previewLocation._id,
+                                    _id: locationId,
                                     thumbnailImage: {
                                         src: res[0].data.secure_url,
                                         alt: state.previewLocation.name
@@ -95,7 +98,8 @@ const ThumbnailTabView = ({location}) => {
             });
         }
         else {
-            API.createLocation(state.previewLocation, (res, err) => {
+            if (!canCreate(state.previewLocation)) return;
+            API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                 if (res && res.status === 200) {
                     console.log(res.data);
                     const idField = res.data._id;
@@ -149,6 +153,7 @@ const ThumbnailTabView = ({location}) => {
      * Updates the preview in context so when it is time to show the preview data from this tab will be included.
      */
     const updatePreview = () => {
+        if (!ready.current) return;
         const previewLocation = {
             thumbnailImage,
             ...((isPublished != null) && {isPublished})

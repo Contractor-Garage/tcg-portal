@@ -1,4 +1,4 @@
-import { DELETE_USER, OPEN_PREVIEW, RESET_PREVIEW, SET_BANNER_IMAGE_PENDING, SET_DETAIL_PAGE_IMAGES_PENDING, SET_TABVIEW, SET_THUMBNAIL_IMAGE_PENDING, SET_USER, SET_USERS, SET_VIDEO_PENDING, UPDATE_PREVIEW } from "./ActionTypes"
+import { DELETE_USER, MERGE_PREVIEW, OPEN_PREVIEW, RESET_PREVIEW, SET_BANNER_IMAGE_PENDING, SET_DETAIL_PAGE_IMAGES_PENDING, SET_TABVIEW, SET_THUMBNAIL_IMAGE_PENDING, SET_USER, SET_USERS, SET_VIDEO_PENDING, UPDATE_PREVIEW } from "./ActionTypes"
 
 const Reducer = (state, action) => {
     switch (action.type) {
@@ -12,6 +12,10 @@ const Reducer = (state, action) => {
             return {...state, tabView: action.payload};
         case UPDATE_PREVIEW:
             return {...state, previewLocation: action.payload};
+        // Merges fields into the editor's copy using the latest state, so it is safe to dispatch from a
+        // request callback even after the tab that started the request has closed.
+        case MERGE_PREVIEW:
+            return {...state, previewLocation: {...state.previewLocation, ...action.payload}};
         case OPEN_PREVIEW:
             return {...state, openPreview: true};
         case RESET_PREVIEW:

@@ -1,10 +1,11 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { useHistory } from 'react-router-dom';
-import { UPDATE_PREVIEW } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { AppContext } from '../../context/Store';
 import { TAB_VIDEO } from '../../shared/Constants';
 import { API } from '../../util/API';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 
 const PaymentTabView = ({location}) => {
@@ -18,6 +19,8 @@ const PaymentTabView = ({location}) => {
     const [isPublished, setIsPublished] = useState();
 
     const [wasValidated, setWasValidated] = useState(false);
+    // True once the location has loaded into this tab's fields (see GeneralTabView).
+    const ready = useRef(false);
 
     /**
      * Every time a field changes update the preview so when this tab is exited the preview retains its data.
@@ -34,9 +37,12 @@ const PaymentTabView = ({location}) => {
         };
         setEnablePayments(locationWithChanges.enablePayments ? locationWithChanges.enablePayments : false);
         setPaypalEmail(locationWithChanges.paypalEmail ? locationWithChanges.paypalEmail : '');
-        setMarkupPercentage(locationWithChanges.paymentMarkupPercent ? (locationWithChanges.paymentMarkupPercent * 100).toFixed(1) : '');
-        setMarkupAmount(locationWithChanges.paymentMarkupFixed ? locationWithChanges.paymentMarkupFixed : '');
+        // A markup of 0 is a real value and must show as 0, not blank (B12).
+        const hasValue = value => value !== undefined && value !== null && value !== '';
+        setMarkupPercentage(hasValue(locationWithChanges.paymentMarkupPercent) ? (Number(locationWithChanges.paymentMarkupPercent) * 100).toFixed(1) : '');
+        setMarkupAmount(hasValue(locationWithChanges.paymentMarkupFixed) ? locationWithChanges.paymentMarkupFixed : '');
         setIsPublished(locationWithChanges.isPublished ? locationWithChanges.isPublished: null);
+        if (Object.keys(location).length > 0) ready.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location]);
 
@@ -48,10 +54,12 @@ const PaymentTabView = ({location}) => {
         }
         else {
             e.preventDefault();
-            if (state.previewLocation._id) {
-                const updateRequest = publish ? { ...state.previewLocation, isPublished: true, isDraft: false } : state.previewLocation;
+            const locationId = resolveLocationId(state.previewLocation, history);
+            if (locationId) {
+                const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
                 API.updateLocation_hideToast(updateRequest, (res, err) => {
                     if (res && res.status === 200) {
+                        dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                         console.log('success!');
                         if (publish) {
                             setIsPublished(true);
@@ -67,7 +75,8 @@ const PaymentTabView = ({location}) => {
                 });
             }
             else {
-                API.createLocation(state.previewLocation, (res, err) => {
+                if (!canCreate(state.previewLocation)) return;
+                API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                     if (res && res.status === 200) {
                         console.log('success!');
                         dispatch({type: UPDATE_PREVIEW, payload: res.data});
@@ -90,11 +99,14 @@ const PaymentTabView = ({location}) => {
      * Updates the preview in context so when it is time to show the preview data from this tab will be included.
      */
     const updatePreview = () => {
+        if (!ready.current) return;
+        const hasValue = value => value !== undefined && value !== null && value !== '';
+        // Always included, so clearing a field (B7) or entering 0 (B12) is saved.
         const previewLocation = {
             ...((enablePayments != null) && {enablePayments}),
-            ...(paypalEmail) && {paypalEmail},
-            ...(markupPercentage && {paymentMarkupPercent: (markupPercentage / 100).toFixed(3)}),
-            ...(markupAmount && {paymentMarkupFixed: markupAmount}),
+            paypalEmail,
+            paymentMarkupPercent: hasValue(markupPercentage) ? (markupPercentage / 100).toFixed(3) : null,
+            paymentMarkupFixed: hasValue(markupAmount) ? markupAmount : null,
             ...((isPublished != null) && {isPublished})
         };
         const payload = {
