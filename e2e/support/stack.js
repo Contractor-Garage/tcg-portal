@@ -49,7 +49,8 @@ const cloudinaryEnv = () => {
 };
 
 const startStack = async () => {
-    const started = [];
+    // Keep the ids of anything started by an earlier run (with E2E_KEEP_STACK=1) so teardown can stop it all.
+    const started = fs.existsSync(PIDS_FILE) ? JSON.parse(fs.readFileSync(PIDS_FILE, 'utf8')) : [];
     const spawnLogged = (name, cmd, args, opts) => {
         const log = fs.openSync(path.join(os.tmpdir(), `tcg-e2e-${name}.log`), 'w');
         const child = spawn(cmd, args, { ...opts, stdio: ['ignore', log, log], windowsHide: true });
