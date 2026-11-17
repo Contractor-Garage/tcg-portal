@@ -3,10 +3,10 @@ import { useHistory, useLocation } from 'react-router-dom';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
 import { MERGE_PREVIEW, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { AppContext } from '../../context/Store';
-import { TAB_THUMBNAIL } from '../../shared/Constants';
+import { TAB_GENERAL, TAB_THUMBNAIL } from '../../shared/Constants';
 import { API } from '../../util/API';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, resolveLocationId, serverOwnedFields, warnIfPendingElsewhere } from '../../util/locationSave';
 import CoordinatePicker from '../coordinatePicker/CoordinatePicker';
 import TabView from '../tabView/TabView';
 
@@ -78,6 +78,7 @@ const GeneralTabView = ({location}) => {
         }
         else {
             e.preventDefault();
+            if (warnIfPendingElsewhere(state, TAB_GENERAL)) return;
             const id = resolveLocationId(state.previewLocation, history);
             if (id) {
                 API.updateLocation_hideToast(buildSaveRequest(state.previewLocation, id, { publish }), (res, err) => {

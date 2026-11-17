@@ -31,6 +31,8 @@ const TabView = props => {
     
     const handleTabViewNavClick = (e, tabView) => {
         e.preventDefault();
+        // Switching tabs mid-upload used to lose track of the new files (B3), so wait until it finishes.
+        if (state.uploading) return;
         dispatch({type: SET_TABVIEW, payload: tabView})
     }
 
@@ -60,10 +62,10 @@ const TabView = props => {
                         {
                             locationId === 'new'
                             ?
-                                <button form={props.formId} type='submit' className="btn btn-primary">Save As Draft</button>
+                                <button form={props.formId} type='submit' className="btn btn-primary" disabled={state.uploading}>Save As Draft</button>
                             :
                             <>
-                                <button form={props.formId} type='submit' className="btn btn-primary">Save</button>
+                                <button form={props.formId} type='submit' className="btn btn-primary" disabled={state.uploading}>Save</button>
                                 {
                                     !props.isPublished && 
                                     <button
@@ -71,14 +73,19 @@ const TabView = props => {
                                         type='submit'
                                         className="btn btn-primary ms-2"
                                         onClick={handlePublishClick}
+                                        disabled={state.uploading}
                                     >
                                         Publish
                                     </button>
                                 }
-                                <button className="btn btn-secondary ms-2" onClick={handlePreviewClick}>Create Preview</button>
+                                <button className="btn btn-secondary ms-2" onClick={handlePreviewClick} disabled={state.uploading}>Create Preview</button>
                             </>
                         }
                     </div>
+                    {
+                        state.uploading &&
+                        <p className='mt-3 mb-0 fw-bold'>Uploading files... Please stay on this tab until the upload finishes.</p>
+                    }
                 </div>
                 <div className="tabViewNavSection d-flex justify-content-between my-5">
                     {
@@ -86,6 +93,8 @@ const TabView = props => {
                         <div className='card p-3'>
                             <a
                                 href='/'
+                                className={state.uploading ? 'text-muted' : undefined}
+                                aria-disabled={state.uploading}
                                 onClick={e => handleTabViewNavClick(e, props.previousView)}
                             >
                                 <i className="fas fa-arrow-left"></i> Previous: {HELPERS.getTabNameFromTabView(props.previousView)}
@@ -97,6 +106,8 @@ const TabView = props => {
                         <div className='ms-auto card p-3'>
                             <a
                                 href='/'
+                                className={state.uploading ? 'text-muted' : undefined}
+                                aria-disabled={state.uploading}
                                 onClick={e => handleTabViewNavClick(e, props.nextView)}
                             >
                                 Next: {HELPERS.getTabNameFromTabView(props.nextView)} <i className="fas fa-arrow-right"></i>

@@ -87,7 +87,8 @@ const goToTab = async (page, heading) => {
         if (current.startsWith(heading)) return;
         const from = order.findIndex(h => current.startsWith(h));
         const to = order.findIndex(h => h.startsWith(heading) || heading.startsWith(h));
-        await page.getByText(to > from ? /^Next:/ : /^Previous:/).click();
+        // The links start or end with an arrow icon, so match their text inside the tab navigation.
+        await page.locator('.tabViewNavSection a', { hasText: to > from ? 'Next:' : 'Previous:' }).click();
     }
     await base.expect(page.locator('h2').first()).toHaveText(new RegExp('^' + heading));
 };

@@ -108,7 +108,8 @@ export const openEditor = async (id, { waitForLoad = true } = {}) => {
     const utils = render(
         <Store>
             <StoreProbe />
-            <MemoryRouter initialEntries={[`/location/${id}`]}>
+            {/* Like the app's HashRouter, ask with window.confirm when a page blocks leaving. */}
+            <MemoryRouter initialEntries={[`/location/${id}`]} getUserConfirmation={(message, callback) => callback(window.confirm(message))}>
                 <RouterProbe />
                 <Route path='/location/:slug'><LocationEdit /></Route>
             </MemoryRouter>

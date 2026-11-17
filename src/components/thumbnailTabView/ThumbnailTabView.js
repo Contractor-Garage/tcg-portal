@@ -1,12 +1,12 @@
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { AppContext } from '../../context/Store';
-import { TAB_GENERAL, TAB_UNIT } from '../../shared/Constants';
+import { TAB_GENERAL, TAB_THUMBNAIL, TAB_UNIT } from '../../shared/Constants';
 import TabView from '../tabView/TabView';
 import Compress from 'compress.js';
-import { MERGE_PREVIEW, SET_THUMBNAIL_IMAGE_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, SET_THUMBNAIL_IMAGE_PENDING, SET_UPLOADING, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields, uploadFailed, warnIfPendingElsewhere } from '../../util/locationSave';
 import './ThumbnailTabView.sass';
 import { API } from '../../util/API';
 import { useHistory } from 'react-router-dom';
@@ -43,105 +43,91 @@ const ThumbnailTabView = ({location}) => {
 
     const handleFormSubmit = (e, publish) => {
         e.preventDefault();
+        if (warnIfPendingElsewhere(state, TAB_THUMBNAIL)) return;
+        const pending = state.thumbnailImage_pending;
+        const doneUploading = () => dispatch({type: SET_UPLOADING, payload: false});
+        const showSaved = (published) => {
+            if (published) {
+                setIsPublished(true);
+                HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');
+            }
+            else {
+                HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
+            }
+        };
+        // Uploads the waiting thumbnail and stores it on the location. With Publish, the location only
+        // goes live once the upload has worked.
+        const uploadPending = (locationId) => {
+            API.uploadImages([pending.file], (uploaded, err) => {
+                if (!uploaded) {
+                    uploadFailed(err);
+                    doneUploading();
+                    return;
+                }
+                const locationImageRequest = {
+                    _id: locationId,
+                    thumbnailImage: {
+                        src: uploaded[0].data.secure_url,
+                        alt: state.previewLocation.name
+                    },
+                    ...(publish && { isPublished: true, isDraft: false })
+                };
+                API.updateLocation_hideToast(locationImageRequest, (saved, err) => {
+                    if (saved && saved.status === 200) {
+                        // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
+                        dispatch({type: MERGE_PREVIEW, payload: savedFields(saved.data)});
+                        setThumbnailImage(saved.data.thumbnailImage);
+                        dispatch({type: SET_THUMBNAIL_IMAGE_PENDING, payload: undefined});
+                        showSaved(publish);
+                    }
+                    else {
+                        uploadFailed(err);
+                    }
+                    doneUploading();
+                });
+            });
+        };
+
         const locationId = resolveLocationId(state.previewLocation, history);
         if (locationId) {
-            const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
+            if (pending) dispatch({type: SET_UPLOADING, payload: true});
+            const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish: publish && !pending });
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
                     dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
-                    if (state.thumbnailImage_pending) {
-                        API.uploadImages([state.thumbnailImage_pending.file], (res, err) => {
-                            if (res) {
-                                const locationImageRequest = {
-                                    _id: locationId,
-                                    thumbnailImage: {
-                                        src: res[0].data.secure_url,
-                                        alt: state.previewLocation.name
-                                    }
-                                }
-                                API.updateLocation_hideToast(locationImageRequest, (res, err) => {
-                                    if (res && res.status === 200) {
-                                        console.log('Thumbnail Upload Success!');
-                                        // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
-                                        dispatch({type: MERGE_PREVIEW, payload: savedFields(res.data)});
-                                        if (publish) {
-                                            setIsPublished(true);
-                                            HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');
-                                        }
-                                        else {
-                                            HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
-                                        }
-                                        setThumbnailImage(locationImageRequest.thumbnailImage);
-                                        dispatch({type: SET_THUMBNAIL_IMAGE_PENDING, payload: undefined});
-                                    }
-                                    else if (err) {
-                                        console.log(err);
-                                    }
-                                });
-                            }
-                            else if (err) {
-                                console.log(err);
-                            }
-                        });
+                    if (pending) {
+                        uploadPending(locationId);
                     }
                     else {
-                        if (publish) {
-                            setIsPublished(true);
-                            HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');
-                        }
-                        else {
-                            HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
-                        }
+                        showSaved(publish);
                     }
                 }
-                else if (err) {
+                else {
                     console.log(err);
+                    doneUploading();
                 }
             });
         }
         else {
             if (!canCreate(state.previewLocation)) return;
+            if (pending) dispatch({type: SET_UPLOADING, payload: true});
             API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                 if (res && res.status === 200) {
-                    console.log(res.data);
-                    const idField = res.data._id;
-                    if (state.thumbnailImage_pending) {
-                        API.uploadImages([state.thumbnailImage_pending.file], (res, err) => {
-                            if (res) {
-                                const locationImageRequest = {
-                                    _id: idField,
-                                    thumbnailImage: {
-                                        src: res[0].data.secure_url,
-                                        alt: state.previewLocation.name
-                                    }
-                                }
-                                API.updateLocation_hideToast(locationImageRequest, (res, err) => {
-                                    if (res && res.status === 200) {
-                                        console.log('Thumbnail Upload Success!');
-                                        HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
-                                        setThumbnailImage(locationImageRequest.thumbnailImage);
-                                        dispatch({type: SET_THUMBNAIL_IMAGE_PENDING, payload: undefined});
-                                        dispatch({type: UPDATE_PREVIEW, payload: res.data});
-                                        history.push(`/location/${res.data._id}`);
-                                    }
-                                    else if (err) {
-                                        console.log(err);
-                                    }
-                                });
-                            }
-                            else if (err) {
-                                console.log(err);
-                            }
-                        });
+                    // The location exists now: switch to its address straight away, so a failed upload
+                    // can't lead to a second copy being created on the next Save.
+                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                    history.push(`/location/${res.data._id}`);
+                    if (pending) {
+                        uploadPending(res.data._id);
                     }
                     else {
                         HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
                         dispatch({type: UPDATE_PREVIEW, payload: res.data});
-                        history.push(`/location/${res.data._id}`);
                     }
                 }
-                else if (err) {
+                else {
                     console.log(err);
+                    doneUploading();
                 }
             });
         }

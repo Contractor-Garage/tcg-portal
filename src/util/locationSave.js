@@ -1,3 +1,4 @@
+import { TAB_MEDIA, TAB_THUMBNAIL, TAB_VIDEO } from '../shared/Constants';
 import { HELPERS, TOAST_TYPES } from './helpers';
 
 /**
@@ -89,4 +90,35 @@ export const savedFields = (saved) => {
         MEDIA_FIELDS.forEach(key => { if (key in saved) fields[key] = saved[key]; });
     }
     return fields;
+};
+
+const hasItems = value => Array.isArray(value) ? value.length > 0 : !!value;
+
+/** Names of tabs (other than `ownTab`) holding files that haven't been uploaded yet. */
+export const pendingUploadsElsewhere = (state, ownTab) => {
+    const tabs = [];
+    if (ownTab !== TAB_THUMBNAIL && hasItems(state.thumbnailImage_pending)) tabs.push('Thumbnail');
+    if (ownTab !== TAB_MEDIA && (hasItems(state.bannerImage_pending) || hasItems(state.detailPageImages_pending))) tabs.push('Image');
+    if (ownTab !== TAB_VIDEO && (hasItems(state.videos_pending) || Object.keys(state.posterUpdates_pending || {}).length > 0)) tabs.push('Video');
+    return tabs;
+};
+
+/** True if anything anywhere in the editor is waiting to be uploaded. */
+export const hasPendingUploads = (state) => pendingUploadsElsewhere(state, null).length > 0;
+
+/**
+ * Files only upload when Save is clicked on their own tab. Saving from another tab used to report
+ * success while silently skipping them (B8), so stop and say where to go instead.
+ */
+export const warnIfPendingElsewhere = (state, ownTab) => {
+    const tabs = pendingUploadsElsewhere(state, ownTab);
+    if (tabs.length === 0) return false;
+    HELPERS.showToast(TOAST_TYPES.WARNING, `New files on the ${tabs.join(' and ')} tab${tabs.length > 1 ? 's' : ''} haven't been uploaded yet. Open that tab and click Save there first.`);
+    return true;
+};
+
+/** One clear message when an upload, or saving its result, fails (B10). */
+export const uploadFailed = (err) => {
+    console.log(err);
+    HELPERS.showToast(TOAST_TYPES.ERROR, 'The upload did not finish, so the new files were not saved. Please check your connection and click Save again.');
 };

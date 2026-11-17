@@ -11,7 +11,9 @@ const initialState = {
     detailPageImages_pending: undefined,
     bannerImage_pending: undefined,
     thumbnailImage_pending: undefined,
-    videos_pending: undefined
+    videos_pending: undefined,
+    posterUpdates_pending: undefined,
+    uploading: false
 }
 
 const Store = (props) => {
