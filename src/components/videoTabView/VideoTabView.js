@@ -7,12 +7,12 @@ import React, {
 } from 'react';
 import { useDropzone } from 'react-dropzone';
 import Compress from 'compress.js';
-import { MERGE_PREVIEW, SET_VIDEO_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
+import { MERGE_PREVIEW, SET_POSTER_UPDATES_PENDING, SET_UPLOADING, SET_VIDEO_PENDING, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
 import { AppContext } from '../../context/Store';
-import { TAB_MEDIA, TAB_PAYMENT } from '../../shared/Constants';
+import { TAB_MEDIA, TAB_PAYMENT, TAB_VIDEO } from '../../shared/Constants';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, remindPendingElsewhere, resolveLocationId, savedFields, serverOwnedFields, sessionDispatch, uploadFailed } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import VideoCard from '../videoCard/VideoCard';
 import './VideoTabView.sass';
@@ -40,8 +40,6 @@ const VideoTabView = ({ location }) => {
 
     // True once the location has loaded into this tab (see GeneralTabView).
     const ready = useRef(false);
-    // Ref for tracking which existing videos' poster have been updated
-    const updatedPostersToVideoIdMap = useRef({});
 
     const compress = new Compress();
 
@@ -73,295 +71,131 @@ const VideoTabView = ({ location }) => {
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
+        // Replies that arrive after the editor has moved to another location are ignored.
+        const later = sessionDispatch(dispatch);
         e.preventDefault();
+        remindPendingElsewhere(state, TAB_VIDEO);
+        const videosPending = state.videos_pending && state.videos_pending.length > 0 ? state.videos_pending : undefined;
+        const posterUpdates = state.posterUpdates_pending || {};
+        const pending = !!videosPending || Object.keys(posterUpdates).length > 0;
+        const finish = () => {
+            setShowLoader(false);
+            later({ type: SET_UPLOADING, payload: false });
+        };
+        const fail = (err) => {
+            uploadFailed(err);
+            finish();
+        };
+        const showSaved = (published) => {
+            if (published) {
+                setIsPublished(true);
+                HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');
+            }
+            else {
+                HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
+            }
+        };
+        const startUploading = () => {
+            HELPERS.showToast(TOAST_TYPES.INFO, 'Video Upload Started');
+            setShowLoader(true);
+            later({ type: SET_UPLOADING, payload: true });
+        };
+        // The upload helpers report through callbacks; a failure must reject, not leave the spinner
+        // running forever (B10).
+        const upload = (send, files) => new Promise((resolve, reject) => {
+            if (files.length === 0) {
+                resolve([]);
+                return;
+            }
+            send(files, (res, err) => (res ? resolve(res) : reject(err || new Error('Upload failed'))));
+        });
+        // Uploads new videos (with their posters) and replacement posters, then saves them. The existing
+        // videos come from what the server has just saved, never from this tab's memory, so a video
+        // deleted after its poster was changed can't break the save (B10). With Publish, the location
+        // only goes live once everything has uploaded.
+        const uploadPending = (locationId, savedVideos) => {
+            const newVideos = videosPending || [];
+            const stillThere = new Set((savedVideos || []).map(video => String(video._id)));
+            const posterUpdateIds = Object.keys(posterUpdates).filter(id => stillThere.has(id));
+            Promise.all([
+                upload(API.uploadVideos, newVideos.map(video => video.video.file)),
+                upload(API.uploadImages, newVideos.filter(video => video.poster && video.poster.file).map(video => video.poster.file)),
+                upload(API.uploadImages, posterUpdateIds.map(id => posterUpdates[id].file))
+            ])
+            .then(([videoResponses, posterResponses, posterUpdateResponses]) => {
+                const posters = [...posterResponses];
+                const uploadedVideos = newVideos.map((video, i) => ({
+                    src: videoResponses[i].data.secure_url,
+                    ...(video.poster && video.poster.file && { poster: posters.shift().data.secure_url })
+                }));
+                const existingVideos = (savedVideos || []).map(video => {
+                    const i = posterUpdateIds.indexOf(String(video._id));
+                    return i >= 0 ? { ...video, poster: posterUpdateResponses[i].data.secure_url } : video;
+                });
+                const locationVideosRequest = {
+                    _id: locationId,
+                    detailPageVideos: uploadedVideos.concat(existingVideos),
+                    ...(publish && { isPublished: true, isDraft: false })
+                };
+                API.updateLocation_hideToast(locationVideosRequest, (saved, err) => {
+                    if (saved && saved.status === 200) {
+                        // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
+                        later({ type: MERGE_PREVIEW, payload: savedFields(saved.data) });
+                        setDetailPageVideos(saved.data.detailPageVideos);
+                        later({ type: SET_VIDEO_PENDING, payload: undefined });
+                        later({ type: SET_POSTER_UPDATES_PENDING, payload: undefined });
+                        showSaved(publish);
+                        finish();
+                    }
+                    else {
+                        fail(err);
+                    }
+                });
+            })
+            .catch(fail);
+        };
+
         const locationId = resolveLocationId(state.previewLocation, history);
         if (locationId) {
-            HELPERS.showToast(TOAST_TYPES.INFO, 'Video Upload Started');
-            setShowLoader(true);
-            // First update the location data.
-            // The server will be responsible for deleting any videos or poster images that are no longer in the new request.
-            const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
-            const posterUpdateKeys = Object.keys(
-                updatedPostersToVideoIdMap.current
-            );
-            for (let i = 0; i < posterUpdateKeys.length; i++) {
-                updateRequest.detailPageVideos.find(
-                    (video) => video._id === posterUpdateKeys[i]
-                ).poster = undefined;
-            }
+            if (pending) startUploading();
+            // First save the location as it stands. The server deletes any videos or posters no longer in it.
+            const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish: publish && !pending });
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
-                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
-                    if (
-                        state.videos_pending ||
-                        Object.keys(updatedPostersToVideoIdMap.current).length >
-                            0
-                    ) {
-                        const videoFiles = state.videos_pending
-                            ? state.videos_pending.map(
-                                  (video) => video.video.file
-                              )
-                            : [];
-                        const imageFiles = state.videos_pending
-                            ? state.videos_pending
-                                  .filter((video) => !!video.poster.file)
-                                  .map((video) => video.poster.file)
-                            : [];
-                        const posterUpdateFiles = posterUpdateKeys.map(
-                            (key) => updatedPostersToVideoIdMap.current[key]
-                        );
-                        let videoResolver;
-                        let imageResolver;
-                        let posterUpdateResolver;
-                        const videoLoader = new Promise((resolve, reject) => {
-                            videoResolver = resolve;
-                        });
-                        const imageLoader = new Promise((resolve, reject) => {
-                            imageResolver = resolve;
-                        });
-                        // Add another loader for poster images on existing videos
-                        const posterImageLoader = new Promise(
-                            (resolve, reject) => {
-                                posterUpdateResolver = resolve;
-                            }
-                        );
-                        API.uploadVideos(videoFiles, (res, err) => {
-                            if (res) {
-                                videoResolver(res);
-                            } else if (err) {
-                                console.log(err);
-                            }
-                        });
-                        API.uploadImages(imageFiles, (res, err) => {
-                            if (res) {
-                                imageResolver(res);
-                            } else if (err) {
-                                console.log(err);
-                            }
-                        });
-                        // Upload the updated poster image files
-                        API.uploadImages(posterUpdateFiles, (res, err) => {
-                            if (res) {
-                                posterUpdateResolver(res);
-                            } else if (err) {
-                                console.log(err);
-                            }
-                        });
-                        Promise.all([
-                            videoLoader,
-                            imageLoader,
-                            posterImageLoader
-                        ]).then(
-                            ([
-                                videoResponses,
-                                imageResponses,
-                                posterUpdateResponses
-                            ]) => {
-                                const locationVideosRequest = {
-                                    _id: locationId,
-                                    detailPageVideos: []
-                                };
-                                if (state.videos_pending) {
-                                    for (
-                                        let i = 0;
-                                        i < state.videos_pending.length;
-                                        i++
-                                    ) {
-                                        locationVideosRequest.detailPageVideos.push(
-                                            {
-                                                src: videoResponses[i].data
-                                                    .secure_url,
-                                                ...(state.videos_pending[i]
-                                                    .poster.file && {
-                                                    poster: imageResponses.shift()
-                                                        .data.secure_url
-                                                })
-                                            }
-                                        );
-                                    }
-                                }
-                                // Before doing this add the newly uploaded poster image to the matching existing detailPageVideo
-                                for (
-                                    let i = 0;
-                                    i < posterUpdateKeys.length;
-                                    i++
-                                ) {
-                                    detailPageVideos.find(
-                                        (video) =>
-                                            video._id === posterUpdateKeys[i]
-                                    ).poster =
-                                        posterUpdateResponses[
-                                            i
-                                        ].data.secure_url;
-                                }
-                                locationVideosRequest.detailPageVideos =
-                                    locationVideosRequest.detailPageVideos.concat(
-                                        detailPageVideos
-                                    );
-                                API.updateLocation_hideToast(
-                                    locationVideosRequest,
-                                    (res, err) => {
-                                        if (res && res.status === 200) {
-                                            if (publish) {
-                                                setIsPublished(true);
-                                                HELPERS.showToast(
-                                                    TOAST_TYPES.SUCCESS,
-                                                    'Location Published!'
-                                                );
-                                            } else {
-                                                HELPERS.showToast(
-                                                    TOAST_TYPES.SUCCESS,
-                                                    'Update Successful!'
-                                                );
-                                            }
-                                            // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
-                                            dispatch({type: MERGE_PREVIEW, payload: savedFields(res.data)});
-                                            setDetailPageVideos(
-                                                res.data.detailPageVideos
-                                            );
-                                            setShowLoader(false);
-                                            dispatch({
-                                                type: SET_VIDEO_PENDING,
-                                                payload: undefined
-                                            });
-                                            updatedPostersToVideoIdMap.current =
-                                                {};
-                                        } else if (err) {
-                                            console.log(err);
-                                            setShowLoader(false);
-                                        }
-                                    }
-                                );
-                            }
-                        );
-                    } else {
-                        if (publish) {
-                            setIsPublished(true);
-                            HELPERS.showToast(
-                                TOAST_TYPES.SUCCESS,
-                                'Location Published!'
-                            );
-                            setShowLoader(false);
-                        } else {
-                            HELPERS.showToast(
-                                TOAST_TYPES.SUCCESS,
-                                'Update Successful!'
-                            );
-                            setShowLoader(false);
-                        }
+                    later({ type: MERGE_PREVIEW, payload: serverOwnedFields(res.data) });
+                    if (pending) {
+                        uploadPending(locationId, res.data.detailPageVideos);
                     }
-                } else if (err) {
+                    else {
+                        showSaved(publish);
+                    }
+                }
+                else {
                     console.log(err);
-                    setShowLoader(false);
+                    finish();
                 }
             });
-        } else {
+        }
+        else {
             if (!canCreate(state.previewLocation)) return;
-            HELPERS.showToast(TOAST_TYPES.INFO, 'Video Upload Started');
-            setShowLoader(true);
+            if (pending) startUploading();
             API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                 if (res && res.status === 200) {
-                    // Once location is saved if there are pending images upload to cloudinary.
-                    const idField = res.data._id;
-                    if (state.videos_pending) {
-                        const videoFiles = state.videos_pending
-                            ? state.videos_pending.map(
-                                  (video) => video.video.file
-                              )
-                            : [];
-                        const imageFiles = state.videos_pending
-                            ? state.videos_pending
-                                  .filter((video) => !!video.poster.file)
-                                  .map((video) => video.poster.file)
-                            : [];
-                        let videoResolver;
-                        let imageResolver;
-                        const videoLoader = new Promise((resolve, reject) => {
-                            videoResolver = resolve;
-                        });
-                        const imageLoader = new Promise((resolve, reject) => {
-                            imageResolver = resolve;
-                        });
-                        API.uploadVideos(videoFiles, (res, err) => {
-                            if (res) {
-                                videoResolver(res);
-                            } else if (err) {
-                                console.log(err);
-                            }
-                        });
-                        API.uploadImages(imageFiles, (res, err) => {
-                            if (res) {
-                                imageResolver(res);
-                            } else if (err) {
-                                console.log(err);
-                            }
-                        });
-                        Promise.all([videoLoader, imageLoader]).then(
-                            ([videoResponses, imageResponses]) => {
-                                const locationVideosRequest = {
-                                    _id: idField,
-                                    detailPageVideos: []
-                                };
-                                for (
-                                    let i = 0;
-                                    i < state.videos_pending.length;
-                                    i++
-                                ) {
-                                    locationVideosRequest.detailPageVideos.push(
-                                        {
-                                            src: videoResponses[i].data
-                                                .secure_url,
-                                            ...(state.videos_pending[i].poster
-                                                .file && {
-                                                poster: imageResponses.shift()
-                                                    .data.secure_url
-                                            })
-                                        }
-                                    );
-                                }
-                                API.updateLocation_hideToast(
-                                    locationVideosRequest,
-                                    (res, err) => {
-                                        if (res && res.status === 200) {
-                                            HELPERS.showToast(
-                                                TOAST_TYPES.SUCCESS,
-                                                'Saved as Draft!'
-                                            );
-                                            setDetailPageVideos(
-                                                res.data.detailPageVideos
-                                            );
-                                            setShowLoader(false);
-                                            dispatch({
-                                                type: SET_VIDEO_PENDING,
-                                                payload: undefined
-                                            });
-                                            dispatch({
-                                                type: UPDATE_PREVIEW,
-                                                payload: res.data
-                                            });
-                                            history.push(
-                                                `/location/${res.data._id}`
-                                            );
-                                        } else if (err) {
-                                            console.log(err);
-                                            setShowLoader(false);
-                                        }
-                                    }
-                                );
-                            }
-                        );
-                    } else {
-                        HELPERS.showToast(
-                            TOAST_TYPES.SUCCESS,
-                            'Saved as Draft!'
-                        );
-                        setShowLoader(false);
-                        dispatch({ type: UPDATE_PREVIEW, payload: res.data });
-                        history.push(`/location/${res.data._id}`);
+                    // The location exists now: switch to its address straight away, so a failed upload
+                    // can't lead to a second copy being created on the next Save.
+                    later({ type: MERGE_PREVIEW, payload: serverOwnedFields(res.data) });
+                    later.isCurrent() && history.push(`/location/${res.data._id}`);
+                    if (pending) {
+                        uploadPending(res.data._id, res.data.detailPageVideos);
                     }
-                } else if (err) {
+                    else {
+                        HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Saved as Draft!');
+                        later({ type: UPDATE_PREVIEW, payload: res.data });
+                    }
+                }
+                else {
                     console.log(err);
-                    setShowLoader(false);
+                    finish();
                 }
             });
         }
@@ -465,6 +299,8 @@ const VideoTabView = ({ location }) => {
         getRootProps: getVideoRootProps,
         getInputProps: getVideoInputProps
     } = useDropzone({
+        // No new files while an upload runs: they would be cleared when it finishes.
+        disabled: state.uploading,
         onDrop: onVideoDrop,
         onDropRejected: onVideoDropRejected,
         maxFiles: 1,
@@ -476,6 +312,8 @@ const VideoTabView = ({ location }) => {
         getRootProps: getImageRootProps,
         getInputProps: getImageInputProps
     } = useDropzone({
+        // No new files while an upload runs: they would be cleared when it finishes.
+        disabled: state.uploading,
         onDrop: onImageDrop,
         onDropRejected: onImageDropRejected,
         maxFiles: 1,
@@ -485,7 +323,9 @@ const VideoTabView = ({ location }) => {
     const handleEdit = (index) => {
         if (detailPageVideos[index]) {
             setCurrentVideo({ url: detailPageVideos[index].src });
-            setCurrentPoster({ url: detailPageVideos[index].poster });
+            // A replacement poster still waiting to upload is shown (and kept) when editing again.
+            const waitingPoster = (state.posterUpdates_pending || {})[detailPageVideos[index]._id];
+            setCurrentPoster(waitingPoster ? { ...waitingPoster } : { url: detailPageVideos[index].poster });
             setIsEditing(true);
             setEditingIndex(index);
             togglePosterModal();
@@ -495,8 +335,14 @@ const VideoTabView = ({ location }) => {
     const handleDelete = (index) => {
         if (window.confirm('Are you sure you want to delete this video?')) {
             const newDetailPageVideos = [...detailPageVideos];
-            newDetailPageVideos.splice(index, 1);
+            const [removed] = newDetailPageVideos.splice(index, 1);
             setDetailPageVideos(newDetailPageVideos);
+            // A replacement poster waiting for this video is no longer needed.
+            const updates = { ...(state.posterUpdates_pending || {}) };
+            if (removed && updates[removed._id]) {
+                delete updates[removed._id];
+                dispatch({ type: SET_POSTER_UPDATES_PENDING, payload: Object.keys(updates).length > 0 ? updates : undefined });
+            }
         }
     };
 
@@ -506,23 +352,20 @@ const VideoTabView = ({ location }) => {
 
     const handleUpdatePoster = () => {
         if (isEditing) {
+            const video = detailPageVideos[editingIndex];
+            const updates = { ...(state.posterUpdates_pending || {}) };
             if (currentPoster?.file) {
-                updatedPostersToVideoIdMap.current[
-                    detailPageVideos[editingIndex]._id
-                ] = currentPoster.file;
+                // A new poster waits here as a file until Save uploads it. The video keeps its stored
+                // poster until then: the browser-only preview link must never be saved (B4).
+                updates[video._id] = { file: currentPoster.file, url: currentPoster.url };
             } else {
-                delete updatedPostersToVideoIdMap.current[
-                    detailPageVideos[editingIndex]._id
-                ];
+                // Poster removed, or left as it was.
+                delete updates[video._id];
+                const newDetialPageVideos = [...detailPageVideos];
+                newDetialPageVideos.splice(editingIndex, 1, { _id: video._id, src: video.src, poster: currentPoster?.url });
+                setDetailPageVideos(newDetialPageVideos);
             }
-            const newVideo = {
-                _id: detailPageVideos[editingIndex]._id,
-                src: detailPageVideos[editingIndex].src,
-                poster: currentPoster?.url
-            };
-            const newDetialPageVideos = [...detailPageVideos];
-            newDetialPageVideos.splice(editingIndex, 1, newVideo);
-            setDetailPageVideos(newDetialPageVideos);
+            dispatch({ type: SET_POSTER_UPDATES_PENDING, payload: Object.keys(updates).length > 0 ? updates : undefined });
             togglePosterModal();
         } else if (isEditing_pending) {
             const newVideo = {
@@ -670,7 +513,7 @@ const VideoTabView = ({ location }) => {
                                     >
                                         <VideoCard
                                             src={video.src}
-                                            poster={video.poster}
+                                            poster={((state.posterUpdates_pending || {})[video._id] || {}).url || video.poster}
                                             onEdit={() => handleEdit(index)}
                                             onDelete={() => handleDelete(index)}
                                         />

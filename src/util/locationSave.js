@@ -1,3 +1,4 @@
+import { TAB_MEDIA, TAB_THUMBNAIL, TAB_VIDEO } from '../shared/Constants';
 import { HELPERS, TOAST_TYPES } from './helpers';
 
 /**
@@ -89,4 +90,77 @@ export const savedFields = (saved) => {
         MEDIA_FIELDS.forEach(key => { if (key in saved) fields[key] = saved[key]; });
     }
     return fields;
+};
+
+const hasItems = value => Array.isArray(value) ? value.length > 0 : !!value;
+
+/** Names of tabs (other than `ownTab`) holding files that haven't been uploaded yet. */
+export const pendingUploadsElsewhere = (state, ownTab) => {
+    const tabs = [];
+    if (ownTab !== TAB_THUMBNAIL && hasItems(state.thumbnailImage_pending)) tabs.push('Thumbnail');
+    if (ownTab !== TAB_MEDIA && (hasItems(state.bannerImage_pending) || hasItems(state.detailPageImages_pending))) tabs.push('Image');
+    if (ownTab !== TAB_VIDEO && (hasItems(state.videos_pending) || Object.keys(state.posterUpdates_pending || {}).length > 0)) tabs.push('Video');
+    return tabs;
+};
+
+/** True if anything anywhere in the editor is waiting to be uploaded. */
+export const hasPendingUploads = (state) => pendingUploadsElsewhere(state, null).length > 0;
+
+/**
+ * Files only upload when Save is clicked on their own tab. Saving from another tab used to report
+ * success while silently skipping them (B8), so stop and say where to go instead.
+ */
+export const warnIfPendingElsewhere = (state, ownTab) => {
+    const tabs = pendingUploadsElsewhere(state, ownTab);
+    if (tabs.length === 0) return false;
+    HELPERS.showToast(TOAST_TYPES.WARNING, `New files on the ${tabs.join(' and ')} tab${tabs.length > 1 ? 's' : ''} haven't been uploaded yet. Open that tab and click Save there first.`);
+    return true;
+};
+
+/**
+ * The Thumbnail, Image and Video tabs each upload only their own files, and saving one never drops
+ * another tab's waiting files, so they don't block each other (that could deadlock). They just remind.
+ */
+export const remindPendingElsewhere = (state, ownTab) => {
+    const tabs = pendingUploadsElsewhere(state, ownTab);
+    if (tabs.length === 0) return;
+    HELPERS.showToast(TOAST_TYPES.INFO, `New files on the ${tabs.join(' and ')} tab${tabs.length > 1 ? 's' : ''} still need Save on that tab.`);
+};
+
+/**
+ * One clear message when an upload, or saving its result, fails (B10). When our own server answered
+ * (e.g. a refused publish), its message has already been shown, so don't add a second one.
+ */
+export const uploadFailed = (err) => {
+    console.log(err);
+    const serverAnswered = err && err.response && err.config && /\/portal\//.test(err.config.url || '');
+    if (serverAnswered) return;
+    HELPERS.showToast(TOAST_TYPES.ERROR, 'The upload did not finish, so the new files were not saved. Please check your connection and click Save again.');
+};
+
+/*
+ * Editor sessions. Each time a location is opened or closed the session moves on. A Save's request
+ * callbacks only act while their session is current: a reply arriving after the user has moved to
+ * another location would otherwise write the old location (and its id) into the new editor.
+ * The request itself still completes, so files uploaded for the old location are still saved to it.
+ */
+let editorSession = 0;
+export const nextEditorSession = () => { editorSession += 1; };
+export const sessionDispatch = (dispatch) => {
+    const session = editorSession;
+    const guarded = (action) => { if (session === editorSession) dispatch(action); };
+    guarded.isCurrent = () => session === editorSession;
+    return guarded;
+};
+
+/*
+ * Deliberate exits (deleting the location, logging out) shouldn't ask "leave anyway?" about waiting
+ * files: the user has already chosen, and staying would leave them on a page that can't save.
+ */
+let leaveAllowed = false;
+export const allowLeavingEditor = () => { leaveAllowed = true; };
+export const consumeLeaveAllowed = () => {
+    const allowed = leaveAllowed;
+    leaveAllowed = false;
+    return allowed;
 };

@@ -2,10 +2,10 @@ import React, { useContext, useEffect, useRef, useState } from 'react';
 import { useHistory } from 'react-router-dom';
 import { MERGE_PREVIEW, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { AppContext } from '../../context/Store';
-import { TAB_VIDEO } from '../../shared/Constants';
+import { TAB_PAYMENT, TAB_VIDEO } from '../../shared/Constants';
 import { API } from '../../util/API';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields, sessionDispatch, warnIfPendingElsewhere } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 
 const PaymentTabView = ({location}) => {
@@ -47,6 +47,8 @@ const PaymentTabView = ({location}) => {
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
+        // Replies that arrive after the editor has moved to another location are ignored.
+        const later = sessionDispatch(dispatch);
         if (!e.target.checkValidity()) {
             e.preventDefault();
             e.stopPropagation();
@@ -54,12 +56,13 @@ const PaymentTabView = ({location}) => {
         }
         else {
             e.preventDefault();
+            if (warnIfPendingElsewhere(state, TAB_PAYMENT)) return;
             const locationId = resolveLocationId(state.previewLocation, history);
             if (locationId) {
                 const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
                 API.updateLocation_hideToast(updateRequest, (res, err) => {
                     if (res && res.status === 200) {
-                        dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                        later({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                         console.log('success!');
                         if (publish) {
                             setIsPublished(true);
@@ -79,8 +82,8 @@ const PaymentTabView = ({location}) => {
                 API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                     if (res && res.status === 200) {
                         console.log('success!');
-                        dispatch({type: UPDATE_PREVIEW, payload: res.data});
-                        history.push(`/location/${res.data._id}`);
+                        later({type: UPDATE_PREVIEW, payload: res.data});
+                        later.isCurrent() && history.push(`/location/${res.data._id}`);
                     }
                     else if (err) {
                         console.log(err);

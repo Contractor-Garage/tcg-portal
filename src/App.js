@@ -34,8 +34,12 @@ function App() {
   const showInfoToast = (message) => toast.info(message);
   const showSuccessToast = (message) => toast.success(message);
   const showWarningToast = (message) => toast.warning(message);
+  // Errors arrive either as a plain message or as a server response. A request that got no response at
+  // all (e.g. the connection dropped) used to show nothing; it now says so.
   const showErrorToast = (error) => {
-    error && toast.error(`${error.status} ${error.statusText}: ${JSON.stringify(error.data)}`);
+    if (typeof error === 'string') toast.error(error);
+    else if (error) toast.error(`${error.status} ${error.statusText}: ${JSON.stringify(error.data)}`);
+    else toast.error('The request could not be completed. Please check your connection and try again.');
   }
   
   return (
