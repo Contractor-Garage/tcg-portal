@@ -2,7 +2,7 @@ import React, { useCallback, useContext, useEffect, useState, useRef } from 'rea
 import { useDropzone } from 'react-dropzone';
 import { TAB_MEDIA, TAB_UNIT, TAB_VIDEO } from '../../shared/Constants';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields, uploadFailed, warnIfPendingElsewhere } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, remindPendingElsewhere, resolveLocationId, savedFields, serverOwnedFields, sessionDispatch, uploadFailed } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import './MediaTabView.sass';
 import Compress from 'compress.js';
@@ -62,12 +62,14 @@ const MediaTabView = ({location}) => {
     }, [location]);
     
     const handleFormSubmit = (e, publish) => {
+        // Replies that arrive after the editor has moved to another location are ignored.
+        const later = sessionDispatch(dispatch);
         e.preventDefault();
-        if (warnIfPendingElsewhere(state, TAB_MEDIA)) return;
+        remindPendingElsewhere(state, TAB_MEDIA);
         const bannerPending = state.bannerImage_pending && state.bannerImage_pending.file ? state.bannerImage_pending : undefined;
         const imagesPending = state.detailPageImages_pending && state.detailPageImages_pending.length > 0 ? state.detailPageImages_pending : undefined;
         const pending = !!(bannerPending || imagesPending);
-        const doneUploading = () => dispatch({type: SET_UPLOADING, payload: false});
+        const doneUploading = () => later({type: SET_UPLOADING, payload: false});
         const showSaved = (published) => {
             if (published) {
                 setIsPublished(true);
@@ -113,14 +115,14 @@ const MediaTabView = ({location}) => {
                 API.updateLocation_hideToast(locationImageRequest, (saved, err) => {
                     if (saved && saved.status === 200) {
                         // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
-                        dispatch({type: MERGE_PREVIEW, payload: savedFields(saved.data)});
+                        later({type: MERGE_PREVIEW, payload: savedFields(saved.data)});
                         if (locationImageRequest.bannerImage) {
                             setBannerImage(saved.data.bannerImage);
-                            dispatch({type: SET_BANNER_IMAGE_PENDING, payload: undefined});
+                            later({type: SET_BANNER_IMAGE_PENDING, payload: undefined});
                         }
                         if (locationImageRequest.detailPageImages) {
                             setDetailPageImages(saved.data.detailPageImages);
-                            dispatch({type: SET_DETAIL_PAGE_IMAGES_PENDING, payload: undefined});
+                            later({type: SET_DETAIL_PAGE_IMAGES_PENDING, payload: undefined});
                         }
                         showSaved(publish);
                     }
@@ -134,12 +136,12 @@ const MediaTabView = ({location}) => {
 
         const locationId = resolveLocationId(state.previewLocation, history);
         if (locationId) {
-            if (pending) dispatch({type: SET_UPLOADING, payload: true});
+            if (pending) later({type: SET_UPLOADING, payload: true});
             // First save the location as it stands. The server deletes any images no longer in it.
             const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish: publish && !pending });
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
-                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                    later({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                     if (pending) {
                         uploadPending(locationId, res.data.detailPageImages);
                     }
@@ -155,19 +157,19 @@ const MediaTabView = ({location}) => {
         }
         else {
             if (!canCreate(state.previewLocation)) return;
-            if (pending) dispatch({type: SET_UPLOADING, payload: true});
+            if (pending) later({type: SET_UPLOADING, payload: true});
             API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                 if (res && res.status === 200) {
                     // The location exists now: switch to its address straight away, so a failed upload
                     // can't lead to a second copy being created on the next Save.
-                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
-                    history.push(`/location/${res.data._id}`);
+                    later({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                    later.isCurrent() && history.push(`/location/${res.data._id}`);
                     if (pending) {
                         uploadPending(res.data._id, res.data.detailPageImages);
                     }
                     else {
                         HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
-                        dispatch({type: UPDATE_PREVIEW, payload: res.data});
+                        later({type: UPDATE_PREVIEW, payload: res.data});
                     }
                 }
                 else {
@@ -228,6 +230,8 @@ const MediaTabView = ({location}) => {
     }
 
     const { getRootProps, getInputProps } = useDropzone({
+        // No new files while an upload runs: they would be cleared when it finishes.
+        disabled: state.uploading,
         onDrop,
         onDropRejected,
         maxFiles: 1,

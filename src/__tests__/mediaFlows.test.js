@@ -4,9 +4,10 @@
  */
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SET_TABVIEW, SET_THUMBNAIL_IMAGE_PENDING, SET_UPLOADING } from '../context/ActionTypes';
+import { SET_DETAIL_PAGE_IMAGES_PENDING, SET_TABVIEW, SET_THUMBNAIL_IMAGE_PENDING, SET_UPLOADING } from '../context/ActionTypes';
 import { TAB_PAYMENT } from '../shared/Constants';
-import { click, dispatch, flush, goToTab, installFakeServer, navigate, openEditor, savedBodies, store, toasts } from '../testUtils/editorHarness';
+import { click, dispatch, fakeServer, flush, goToTab, installFakeServer, lastSavedBody, navigate, openEditor, releasePuts, savedBodies, store, toasts, type } from '../testUtils/editorHarness';
+import { waitFor } from '@testing-library/react';
 
 jest.mock('axios');
 
@@ -62,4 +63,31 @@ test('B3: the sidebar tab links also wait while files upload', async () => {
     await dispatch({ type: SET_UPLOADING, payload: false });
     await dispatch({ type: SET_TABVIEW, payload: TAB_PAYMENT });
     expect(screen.getByRole('heading', { level: 2 }).textContent).toMatch(/^Payment Processing/);
+});
+
+test('waiting files on two media tabs never block each other (no deadlock)', async () => {
+    installFakeServer([base]);
+    await openEditor('loc1');
+    await dispatch({ type: SET_THUMBNAIL_IMAGE_PENDING, payload: { file: new File(['x'], 'thumb.png'), src: 'blob:thumb' } });
+    await dispatch({ type: SET_DETAIL_PAGE_IMAGES_PENDING, payload: [{ file: new File(['y'], 'photo.png'), src: 'blob:photo', alt: 'photo' }] });
+    await goToTab('Image Upload');
+    await click('Save');
+    expect(savedBodies().length).toBeGreaterThan(0); // the Image tab's save went ahead
+    expect(toasts.map(t => t.message).join(' ')).toMatch(/Thumbnail tab/); // with a reminder about the thumbnail
+});
+
+test('a save reply that arrives after leaving never leaks into the next location', async () => {
+    installFakeServer([base, { ...base, _id: 'loc2', name: 'Grandview', slug: 'grandview' }]);
+    await openEditor('loc1');
+    fakeServer.holdPuts = true;
+    await click('Save'); // loc1's save is still on its way...
+    await navigate('/locations');
+    await navigate('/location/loc2');
+    await waitFor(() => expect(screen.getByLabelText('Display Name')).toHaveValue('Grandview'));
+    await releasePuts(); // ...and only now comes back
+    expect(store.state.previewLocation._id).not.toBe('loc1');
+    await type('Display Name', 'Grandview renamed');
+    await click('Save');
+    expect(lastSavedBody()).toMatchObject({ _id: 'loc2', name: 'Grandview renamed' });
+    expect(fakeServer.db.loc1.name).toBe('Garage 9');
 });

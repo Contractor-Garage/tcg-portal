@@ -6,7 +6,7 @@ import { AppContext } from '../../context/Store';
 import { TAB_GENERAL, TAB_THUMBNAIL } from '../../shared/Constants';
 import { API } from '../../util/API';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, resolveLocationId, serverOwnedFields, warnIfPendingElsewhere } from '../../util/locationSave';
+import { allowLeavingEditor, buildCreateRequest, buildSaveRequest, resolveLocationId, serverOwnedFields, sessionDispatch, warnIfPendingElsewhere } from '../../util/locationSave';
 import CoordinatePicker from '../coordinatePicker/CoordinatePicker';
 import TabView from '../tabView/TabView';
 
@@ -71,6 +71,8 @@ const GeneralTabView = ({location}) => {
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
+        // Replies that arrive after the editor has moved to another location are ignored.
+        const later = sessionDispatch(dispatch);
         if (!e.target.checkValidity()) {
             e.preventDefault();
             e.stopPropagation();
@@ -83,7 +85,7 @@ const GeneralTabView = ({location}) => {
             if (id) {
                 API.updateLocation_hideToast(buildSaveRequest(state.previewLocation, id, { publish }), (res, err) => {
                     if (res && res.status === 200) {
-                        dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                        later({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                         if (publish) {
                             setIsPublished(true);
                             HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Location Published!');
@@ -105,8 +107,8 @@ const GeneralTabView = ({location}) => {
                 API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                     if (res && res.status === 200) {
                         console.log('success!');
-                        dispatch({type: UPDATE_PREVIEW, payload: res.data});
-                        history.push(`/location/${res.data._id}`);
+                        later({type: UPDATE_PREVIEW, payload: res.data});
+                        later.isCurrent() && history.push(`/location/${res.data._id}`);
                     }
                     else if (err) {
                         if (err.response && err.response.status === 400) {
@@ -160,6 +162,7 @@ const GeneralTabView = ({location}) => {
             API.deleteLocation(id, (res, err) => {
                 if (res && res.status === 200) {
                     console.log('success');
+                    allowLeavingEditor();
                     history.push('/locations');
                 }
                 else if (err) {

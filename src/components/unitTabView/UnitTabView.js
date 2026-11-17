@@ -6,7 +6,7 @@ import { AppContext } from '../../context/Store';
 import { TAB_MEDIA, TAB_THUMBNAIL, TAB_UNIT } from '../../shared/Constants';
 import { API } from '../../util/API';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields, warnIfPendingElsewhere } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, serverOwnedFields, sessionDispatch, warnIfPendingElsewhere } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import UnitCard from '../unitCard/UnitCard';
 
@@ -93,6 +93,8 @@ const UnitTabView = ({location}) => {
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
+        // Replies that arrive after the editor has moved to another location are ignored.
+        const later = sessionDispatch(dispatch);
         if (!e.target.checkValidity()) {
             e.preventDefault();
             e.stopPropagation();
@@ -106,7 +108,7 @@ const UnitTabView = ({location}) => {
                 const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish });
                 API.updateLocation_hideToast(updateRequest, (res, err) => {
                     if (res && res.status === 200) {
-                        dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                        later({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                         console.log('success!');
                         if (publish) {
                             setIsPublished(true);
@@ -126,8 +128,8 @@ const UnitTabView = ({location}) => {
                 API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                     if (res && res.status === 200) {
                         console.log('success!');
-                        dispatch({type: UPDATE_PREVIEW, payload: res.data});
-                        history.push(`/location/${res.data._id}`);
+                        later({type: UPDATE_PREVIEW, payload: res.data});
+                        later.isCurrent() && history.push(`/location/${res.data._id}`);
                     }
                     else if (err) {
                         console.log(err);

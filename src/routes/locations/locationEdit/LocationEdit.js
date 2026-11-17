@@ -10,7 +10,7 @@ import { SET_BANNER_IMAGE_PENDING, SET_DETAIL_PAGE_IMAGES_PENDING, SET_POSTER_UP
 import { AppContext } from '../../../context/Store';
 import { TAB_GENERAL, TAB_MEDIA, TAB_PAYMENT, TAB_THUMBNAIL, TAB_UNIT, TAB_VIDEO } from '../../../shared/Constants';
 import { API } from '../../../util/API';
-import { hasPendingUploads } from '../../../util/locationSave';
+import { consumeLeaveAllowed, hasPendingUploads, nextEditorSession } from '../../../util/locationSave';
 
 const LocationEdit = () => {
     const routeLocation = useLocation();
@@ -34,6 +34,7 @@ const LocationEdit = () => {
         // Start clean and finish clean, straight away. The old reset ran 1 second after leaving, so it
         // could empty the next location's editor after it had opened (B11), and it missed thumbnail and
         // video files, which then carried over into the next location (B8).
+        nextEditorSession();
         resetEditor();
         if (locationId === 'new') {
             setLocation({isDraft: true});
@@ -51,6 +52,7 @@ const LocationEdit = () => {
         }
 
         return () => {
+            nextEditorSession();
             resetEditor();
             dispatch({type: SET_TABVIEW, payload: TAB_GENERAL});
         }
@@ -67,8 +69,9 @@ const LocationEdit = () => {
     }, [blockLeaving]);
 
     const leaveMessage = (next) => {
-        // Moving to this location's own address (after creating it) is not leaving.
-        if (next.pathname.startsWith('/location/')) return true;
+        // Moving to this location's own address (after creating it) is not leaving, and logging out or
+        // deleting the location are deliberate.
+        if (next.pathname.startsWith('/location/') || next.pathname === '/login' || consumeLeaveAllowed()) return true;
         return state.uploading
             ? 'Files are still uploading. If you leave now they will not be saved. Leave anyway?'
             : 'Some new files have not been uploaded yet. Click Save on their tab first. Leave anyway and lose them?';

@@ -6,7 +6,7 @@ import TabView from '../tabView/TabView';
 import Compress from 'compress.js';
 import { MERGE_PREVIEW, SET_THUMBNAIL_IMAGE_PENDING, SET_UPLOADING, UPDATE_PREVIEW } from '../../context/ActionTypes';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields, uploadFailed, warnIfPendingElsewhere } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, remindPendingElsewhere, resolveLocationId, savedFields, serverOwnedFields, sessionDispatch, uploadFailed } from '../../util/locationSave';
 import './ThumbnailTabView.sass';
 import { API } from '../../util/API';
 import { useHistory } from 'react-router-dom';
@@ -42,10 +42,12 @@ const ThumbnailTabView = ({location}) => {
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
+        // Replies that arrive after the editor has moved to another location are ignored.
+        const later = sessionDispatch(dispatch);
         e.preventDefault();
-        if (warnIfPendingElsewhere(state, TAB_THUMBNAIL)) return;
+        remindPendingElsewhere(state, TAB_THUMBNAIL);
         const pending = state.thumbnailImage_pending;
-        const doneUploading = () => dispatch({type: SET_UPLOADING, payload: false});
+        const doneUploading = () => later({type: SET_UPLOADING, payload: false});
         const showSaved = (published) => {
             if (published) {
                 setIsPublished(true);
@@ -75,9 +77,9 @@ const ThumbnailTabView = ({location}) => {
                 API.updateLocation_hideToast(locationImageRequest, (saved, err) => {
                     if (saved && saved.status === 200) {
                         // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
-                        dispatch({type: MERGE_PREVIEW, payload: savedFields(saved.data)});
+                        later({type: MERGE_PREVIEW, payload: savedFields(saved.data)});
                         setThumbnailImage(saved.data.thumbnailImage);
-                        dispatch({type: SET_THUMBNAIL_IMAGE_PENDING, payload: undefined});
+                        later({type: SET_THUMBNAIL_IMAGE_PENDING, payload: undefined});
                         showSaved(publish);
                     }
                     else {
@@ -90,11 +92,11 @@ const ThumbnailTabView = ({location}) => {
 
         const locationId = resolveLocationId(state.previewLocation, history);
         if (locationId) {
-            if (pending) dispatch({type: SET_UPLOADING, payload: true});
+            if (pending) later({type: SET_UPLOADING, payload: true});
             const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish: publish && !pending });
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
-                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                    later({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
                     if (pending) {
                         uploadPending(locationId);
                     }
@@ -110,19 +112,19 @@ const ThumbnailTabView = ({location}) => {
         }
         else {
             if (!canCreate(state.previewLocation)) return;
-            if (pending) dispatch({type: SET_UPLOADING, payload: true});
+            if (pending) later({type: SET_UPLOADING, payload: true});
             API.createLocation(buildCreateRequest(state.previewLocation), (res, err) => {
                 if (res && res.status === 200) {
                     // The location exists now: switch to its address straight away, so a failed upload
                     // can't lead to a second copy being created on the next Save.
-                    dispatch({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
-                    history.push(`/location/${res.data._id}`);
+                    later({type: MERGE_PREVIEW, payload: serverOwnedFields(res.data)});
+                    later.isCurrent() && history.push(`/location/${res.data._id}`);
                     if (pending) {
                         uploadPending(res.data._id);
                     }
                     else {
                         HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Update Successful!');
-                        dispatch({type: UPDATE_PREVIEW, payload: res.data});
+                        later({type: UPDATE_PREVIEW, payload: res.data});
                     }
                 }
                 else {
@@ -184,6 +186,8 @@ const ThumbnailTabView = ({location}) => {
     }
 
     const { getRootProps, getInputProps } = useDropzone({
+        // No new files while an upload runs: they would be cleared when it finishes.
+        disabled: state.uploading,
         onDrop,
         onDropRejected,
         maxFiles: 1,

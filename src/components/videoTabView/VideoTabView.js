@@ -12,7 +12,7 @@ import { Modal, ModalBody, ModalFooter, ModalHeader } from 'reactstrap';
 import { AppContext } from '../../context/Store';
 import { TAB_MEDIA, TAB_PAYMENT, TAB_VIDEO } from '../../shared/Constants';
 import { HELPERS, TOAST_TYPES } from '../../util/helpers';
-import { buildCreateRequest, buildSaveRequest, canCreate, resolveLocationId, savedFields, serverOwnedFields, uploadFailed, warnIfPendingElsewhere } from '../../util/locationSave';
+import { buildCreateRequest, buildSaveRequest, canCreate, remindPendingElsewhere, resolveLocationId, savedFields, serverOwnedFields, sessionDispatch, uploadFailed } from '../../util/locationSave';
 import TabView from '../tabView/TabView';
 import VideoCard from '../videoCard/VideoCard';
 import './VideoTabView.sass';
@@ -71,14 +71,16 @@ const VideoTabView = ({ location }) => {
     }, [location]);
 
     const handleFormSubmit = (e, publish) => {
+        // Replies that arrive after the editor has moved to another location are ignored.
+        const later = sessionDispatch(dispatch);
         e.preventDefault();
-        if (warnIfPendingElsewhere(state, TAB_VIDEO)) return;
+        remindPendingElsewhere(state, TAB_VIDEO);
         const videosPending = state.videos_pending && state.videos_pending.length > 0 ? state.videos_pending : undefined;
         const posterUpdates = state.posterUpdates_pending || {};
         const pending = !!videosPending || Object.keys(posterUpdates).length > 0;
         const finish = () => {
             setShowLoader(false);
-            dispatch({ type: SET_UPLOADING, payload: false });
+            later({ type: SET_UPLOADING, payload: false });
         };
         const fail = (err) => {
             uploadFailed(err);
@@ -96,7 +98,7 @@ const VideoTabView = ({ location }) => {
         const startUploading = () => {
             HELPERS.showToast(TOAST_TYPES.INFO, 'Video Upload Started');
             setShowLoader(true);
-            dispatch({ type: SET_UPLOADING, payload: true });
+            later({ type: SET_UPLOADING, payload: true });
         };
         // The upload helpers report through callbacks; a failure must reject, not leave the spinner
         // running forever (B10).
@@ -138,10 +140,10 @@ const VideoTabView = ({ location }) => {
                 API.updateLocation_hideToast(locationVideosRequest, (saved, err) => {
                     if (saved && saved.status === 200) {
                         // Update the editor's shared copy directly, so it is right even if this tab has closed (B3).
-                        dispatch({ type: MERGE_PREVIEW, payload: savedFields(saved.data) });
+                        later({ type: MERGE_PREVIEW, payload: savedFields(saved.data) });
                         setDetailPageVideos(saved.data.detailPageVideos);
-                        dispatch({ type: SET_VIDEO_PENDING, payload: undefined });
-                        dispatch({ type: SET_POSTER_UPDATES_PENDING, payload: undefined });
+                        later({ type: SET_VIDEO_PENDING, payload: undefined });
+                        later({ type: SET_POSTER_UPDATES_PENDING, payload: undefined });
                         showSaved(publish);
                         finish();
                     }
@@ -160,7 +162,7 @@ const VideoTabView = ({ location }) => {
             const updateRequest = buildSaveRequest(state.previewLocation, locationId, { publish: publish && !pending });
             API.updateLocation_hideToast(updateRequest, (res, err) => {
                 if (res && res.status === 200) {
-                    dispatch({ type: MERGE_PREVIEW, payload: serverOwnedFields(res.data) });
+                    later({ type: MERGE_PREVIEW, payload: serverOwnedFields(res.data) });
                     if (pending) {
                         uploadPending(locationId, res.data.detailPageVideos);
                     }
@@ -181,14 +183,14 @@ const VideoTabView = ({ location }) => {
                 if (res && res.status === 200) {
                     // The location exists now: switch to its address straight away, so a failed upload
                     // can't lead to a second copy being created on the next Save.
-                    dispatch({ type: MERGE_PREVIEW, payload: serverOwnedFields(res.data) });
-                    history.push(`/location/${res.data._id}`);
+                    later({ type: MERGE_PREVIEW, payload: serverOwnedFields(res.data) });
+                    later.isCurrent() && history.push(`/location/${res.data._id}`);
                     if (pending) {
                         uploadPending(res.data._id, res.data.detailPageVideos);
                     }
                     else {
                         HELPERS.showToast(TOAST_TYPES.SUCCESS, 'Saved as Draft!');
-                        dispatch({ type: UPDATE_PREVIEW, payload: res.data });
+                        later({ type: UPDATE_PREVIEW, payload: res.data });
                     }
                 }
                 else {
@@ -297,6 +299,8 @@ const VideoTabView = ({ location }) => {
         getRootProps: getVideoRootProps,
         getInputProps: getVideoInputProps
     } = useDropzone({
+        // No new files while an upload runs: they would be cleared when it finishes.
+        disabled: state.uploading,
         onDrop: onVideoDrop,
         onDropRejected: onVideoDropRejected,
         maxFiles: 1,
@@ -308,6 +312,8 @@ const VideoTabView = ({ location }) => {
         getRootProps: getImageRootProps,
         getInputProps: getImageInputProps
     } = useDropzone({
+        // No new files while an upload runs: they would be cleared when it finishes.
+        disabled: state.uploading,
         onDrop: onImageDrop,
         onDropRejected: onImageDropRejected,
         maxFiles: 1,

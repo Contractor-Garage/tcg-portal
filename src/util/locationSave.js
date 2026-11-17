@@ -117,8 +117,50 @@ export const warnIfPendingElsewhere = (state, ownTab) => {
     return true;
 };
 
-/** One clear message when an upload, or saving its result, fails (B10). */
+/**
+ * The Thumbnail, Image and Video tabs each upload only their own files, and saving one never drops
+ * another tab's waiting files, so they don't block each other (that could deadlock). They just remind.
+ */
+export const remindPendingElsewhere = (state, ownTab) => {
+    const tabs = pendingUploadsElsewhere(state, ownTab);
+    if (tabs.length === 0) return;
+    HELPERS.showToast(TOAST_TYPES.INFO, `New files on the ${tabs.join(' and ')} tab${tabs.length > 1 ? 's' : ''} still need Save on that tab.`);
+};
+
+/**
+ * One clear message when an upload, or saving its result, fails (B10). When our own server answered
+ * (e.g. a refused publish), its message has already been shown, so don't add a second one.
+ */
 export const uploadFailed = (err) => {
     console.log(err);
+    const serverAnswered = err && err.response && err.config && /\/portal\//.test(err.config.url || '');
+    if (serverAnswered) return;
     HELPERS.showToast(TOAST_TYPES.ERROR, 'The upload did not finish, so the new files were not saved. Please check your connection and click Save again.');
+};
+
+/*
+ * Editor sessions. Each time a location is opened or closed the session moves on. A Save's request
+ * callbacks only act while their session is current: a reply arriving after the user has moved to
+ * another location would otherwise write the old location (and its id) into the new editor.
+ * The request itself still completes, so files uploaded for the old location are still saved to it.
+ */
+let editorSession = 0;
+export const nextEditorSession = () => { editorSession += 1; };
+export const sessionDispatch = (dispatch) => {
+    const session = editorSession;
+    const guarded = (action) => { if (session === editorSession) dispatch(action); };
+    guarded.isCurrent = () => session === editorSession;
+    return guarded;
+};
+
+/*
+ * Deliberate exits (deleting the location, logging out) shouldn't ask "leave anyway?" about waiting
+ * files: the user has already chosen, and staying would leave them on a page that can't save.
+ */
+let leaveAllowed = false;
+export const allowLeavingEditor = () => { leaveAllowed = true; };
+export const consumeLeaveAllowed = () => {
+    const allowed = leaveAllowed;
+    leaveAllowed = false;
+    return allowed;
 };

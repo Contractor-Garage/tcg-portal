@@ -24,6 +24,10 @@ test('B3: while files upload, Save and tab changes wait, and a notice says so', 
     await save(page);
     await expect(page.getByText('Uploading files... Please stay on this tab')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    // No new files mid-upload: picking one does nothing (react-dropzone ignores it while disabled).
+    await page.locator('input[type=file]').first().setInputFiles({ name: 'late.png', mimeType: 'image/png', buffer: makePng() });
+    await page.waitForTimeout(700);
+    await expect(page.getByText('What type of image is this?')).toBeHidden();
     await page.getByText(/^Next:/).click({ force: true }); // it is marked disabled, so force the click to show it's ignored
     await expect(heading(page)).toHaveText(/^Image Upload/);
     await expect.poll(async () => ((await db.location(loc._id)).detailPageImages || []).length, { timeout: 20000 }).toBe(1);

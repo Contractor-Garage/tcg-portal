@@ -28,7 +28,14 @@ export const settle = () => act(() => new Promise(r => setTimeout(r, 0)));
 export const flush = async () => { for (let i = 0; i < 5; i++) await settle(); };
 
 /** In-memory stand-in for the location routes. `db` maps id -> stored location. */
-export const fakeServer = { db: {}, requests: [], nextId: 1, holdGets: false, heldGets: [] };
+export const fakeServer = { db: {}, requests: [], nextId: 1, holdGets: false, heldGets: [], holdPuts: false, heldPuts: [] };
+
+/** Lets held saves (fakeServer.holdPuts = true) finish, like a slow server finally answering. */
+export const releasePuts = async () => {
+    fakeServer.holdPuts = false;
+    fakeServer.heldPuts.splice(0).forEach(release => release());
+    await flush();
+};
 
 /** Lets held location loads (fakeServer.holdGets = true) finish, like a slow server finally answering. */
 export const releaseGets = async () => {
@@ -45,6 +52,8 @@ export const installFakeServer = (locations = []) => {
     fakeServer.nextId = 1;
     fakeServer.holdGets = false;
     fakeServer.heldGets = [];
+    fakeServer.holdPuts = false;
+    fakeServer.heldPuts = [];
     toasts.length = 0;
     axios.get.mockImplementation((url) => {
         fakeServer.requests.push({ method: 'GET', url });
@@ -62,7 +71,9 @@ export const installFakeServer = (locations = []) => {
         if (!stored) return Promise.reject(Object.assign(new Error('missing'), { response: { status: 404 } }));
         if (body.slug === 'taken') return Promise.reject(Object.assign(new Error('slug taken'), { response: { status: 400 } }));
         Object.assign(stored, JSON.parse(JSON.stringify(body)));
-        return ok(JSON.parse(JSON.stringify(stored)));
+        const answer = () => ok(JSON.parse(JSON.stringify(stored)));
+        if (fakeServer.holdPuts) return new Promise(resolve => fakeServer.heldPuts.push(() => resolve(answer())));
+        return answer();
     });
     axios.post.mockImplementation((url, body = {}) => {
         fakeServer.requests.push({ method: 'POST', url, body: JSON.parse(JSON.stringify(body)) });
